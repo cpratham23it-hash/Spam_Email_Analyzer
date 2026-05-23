@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhishGuard — Sign In</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0d12; --surface: #111520; --surface2: #161c2a; --surface3: #1d2438;
+    --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.14);
+    --text: #e8eaf2; --muted: #6b7590;
+    --accent: #00d4aa; --accent-dim: rgba(0,212,170,0.12); --accent-glow: rgba(0,212,170,0.3);
+    --red: #ff4d6a; --red-dim: rgba(255,77,106,0.12);
+    --amber: #ffb547;
+    --mono: 'Space Mono', monospace; --sans: 'DM Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--sans); background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+
+  /* animated grid background */
+  body::before {
+    content: ''; position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(0,212,170,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,170,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    animation: gridDrift 20s linear infinite;
+  }
+  @keyframes gridDrift { from { background-position: 0 0; } to { background-position: 40px 40px; } }
+
+  /* glow orbs */
+  .orb { position: fixed; border-radius: 50%; filter: blur(80px); pointer-events: none; z-index: 0; }
+  .orb1 { width: 400px; height: 400px; background: rgba(0,212,170,0.07); top: -100px; left: -100px; }
+  .orb2 { width: 300px; height: 300px; background: rgba(0,150,255,0.06); bottom: -80px; right: -80px; }
+
+  .container {
+    position: relative; z-index: 1;
+    width: 100%; max-width: 440px;
+    padding: 1.5rem;
+  }
+
+  /* logo + brand */
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+    justify-content: center; margin-bottom: 2.5rem;
+    animation: fadeDown 0.6s ease forwards;
+  }
+  .logo {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), #0096ff);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 30px var(--accent-glow);
+  }
+  .logo svg { width: 24px; height: 24px; }
+  .brand-text h1 { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+  .brand-text p  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* card */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 20px;
+    padding: 2rem;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,212,170,0.05);
+    animation: fadeUp 0.5s ease forwards;
+  }
+  @keyframes fadeDown { from { opacity:0; transform:translateY(-12px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes fadeUp   { from { opacity:0; transform:translateY(16px);  } to { opacity:1; transform:translateY(0); } }
+
+  /* tabs */
+  .tabs {
+    display: flex; background: var(--surface2); border-radius: 10px;
+    padding: 4px; gap: 4px; margin-bottom: 1.75rem;
+  }
+  .tab {
+    flex: 1; padding: 8px; border-radius: 7px; border: none;
+    background: none; color: var(--muted); font-family: var(--sans);
+    font-size: 13px; font-weight: 500; cursor: pointer; transition: all .2s;
+  }
+  .tab.active { background: var(--surface3); color: var(--text); }
+
+  /* form */
+  .form { display: none; flex-direction: column; gap: 14px; }
+  .form.active { display: flex; }
+
+  .field label {
+    display: block; font-size: 11px; font-family: var(--mono);
+    color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .field input {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: 9px; color: var(--text); font-family: var(--mono); font-size: 12px;
+    padding: 11px 14px; outline: none; transition: border-color .2s, box-shadow .2s;
+  }
+  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .field input::placeholder { color: var(--muted); opacity: 0.45; }
+
+  .hint {
+    font-size: 11px; color: var(--muted); line-height: 1.5;
+    background: var(--surface2); border-radius: 8px; padding: 10px 12px;
+    border: 1px solid var(--border);
+  }
+  .hint a { color: var(--accent); text-decoration: none; }
+  .hint a:hover { text-decoration: underline; }
+
+  .btn {
+    width: 100%; padding: 13px; background: var(--accent); color: #000;
+    border: none; border-radius: 10px; font-family: var(--mono);
+    font-size: 13px; font-weight: 700; cursor: pointer; letter-spacing: 0.5px;
+    transition: all .2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin-top: 4px;
+  }
+  .btn:hover { background: #00f0c0; box-shadow: 0 0 24px var(--accent-glow); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid rgba(0,0,0,.3);
+    border-top-color: #000; border-radius: 50%;
+    animation: spin .7s linear infinite; display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .alert {
+    padding: 11px 14px; border-radius: 9px; font-size: 12px; display: none;
+    line-height: 1.5;
+  }
+  .alert.error   { background: var(--red-dim);  color: var(--red);   border: 1px solid rgba(255,77,106,.25); }
+  .alert.success { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,212,170,.25); }
+
+  .divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* section label in register form */
+  .section-label {
+    font-size: 10px; font-family: var(--mono); color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-label::before, .section-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+</style>
+</head>
+<body>
+<div class="orb orb1"></div>
+<div class="orb orb2"></div>
+
+<div class="container">
+  <div class="brand">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        <path d="M9 12l2 2 4-4"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>PhishGuard</h1>
+      <p>AI-powered phishing detection</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('login', this)">Sign in</button>
+      <button class="tab"        onclick="switchTab('register', this)">Create account</button>
+    </div>
+
+    <!-- LOGIN FORM -->
+    <div class="form active" id="form-login">
+      <div class="alert" id="login-alert"></div>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="l-username" placeholder="your_username" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="l-password" placeholder="••••••••" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter') doLogin()" />
+      </div>
+      <button class="btn" id="btn-login" onclick="doLogin()">
+        <span id="btn-login-text">Sign in</span>
+        <div class="spinner" id="spin-login"></div>
+      </button>
+    </div>
+
+    <!-- REGISTER FORM -->
+    <div class="form" id="form-register">
+      <div class="alert" id="reg-alert"></div>
+
+      <div class="section-label">Account</div>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="r-username" placeholder="choose_a_username" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="r-password" placeholder="min. 6 characters" autocomplete="new-password" />
+      </div>
+
+      <div class="section-label">Gmail (for live monitoring)</div>
+      <div class="field">
+        <label>Gmail address</label>
+        <input type="email" id="r-gmail" placeholder="you@gmail.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Gmail App Password</label>
+        <input type="password" id="r-apppw" placeholder="16-char app password (no spaces)"
+               maxlength="19" autocomplete="off" />
+      </div>
+      <div class="hint">
+        ⚙ Need an App Password?
+        <a href="https://myaccount.google.com/apppasswords" target="_blank">
+          myaccount.google.com/apppasswords
+        </a>
+        — requires 2FA enabled on your Google account.
+      </div>
+      <button class="btn" id="btn-reg" onclick="doRegister()">
+        <span id="btn-reg-text">Create account</span>
+        <div class="spinner" id="spin-reg"></div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.form').forEach(f => f.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('form-' + tab).classList.add('active');
+  document.getElementById('login-alert').style.display = 'none';
+  document.getElementById('reg-alert').style.display   = 'none';
+}
+
+function showAlert(id, type, msg) {
+  const el = document.getElementById(id);
+  el.className = 'alert ' + type;
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function setLoading(btnId, spinId, on) {
+  document.getElementById(btnId).disabled = on;
+  document.getElementById(spinId).style.display = on ? 'block' : 'none';
+}
+
+async function doLogin() {
+  const username = document.getElementById('l-username').value.trim();
+  const password = document.getElementById('l-password').value;
+  if (!username || !password) { showAlert('login-alert', 'error', 'Enter username and password.'); return; }
+
+  setLoading('btn-login', 'spin-login', true);
+  document.getElementById('btn-login-text').textContent = 'Signing in…';
+
+  try {
+    const r = await fetch(BASE + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) { showAlert('login-alert', 'error', data.error || 'Login failed.'); return; }
+
+    localStorage.setItem('pg_token',    data.token);
+    localStorage.setItem('pg_username', data.username);
+
+    showAlert('login-alert', 'success', 'Welcome back, ' + data.username + '! Redirecting…');
+    setTimeout(() => { window.location.href = '/app'; }, 800);
+  } catch (e) {
+    showAlert('login-alert', 'error', 'Cannot reach server. Is Flask running?');
+  } finally {
+    setLoading('btn-login', 'spin-login', false);
+    document.getElementById('btn-login-text').textContent = 'Sign in';
+  }
+}
+
+async function doRegister() {
+  const username     = document.getElementById('r-username').value.trim();
+  const password     = document.getElementById('r-password').value;
+  const gmail        = document.getElementById('r-gmail').value.trim();
+  const app_password = document.getElementById('r-apppw').value.trim().replace(/\s+/g, '');
+
+  if (!username || !password || !gmail || !app_password) {
+    showAlert('reg-alert', 'error', 'All fields are required.'); return;
+  }
+
+  setLoading('btn-reg', 'spin-reg', true);
+  document.getElementById('btn-reg-text').textContent = 'Creating account…';
+
+  try {
+    const r = await fetch(BASE + '/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, gmail, app_password }),
+    });
+    const data = await r.json();
+    if (!r.ok) { showAlert('reg-alert', 'error', data.error || 'Registration failed.'); return; }
+
+    showAlert('reg-alert', 'success', 'Account created! Signing you in…');
+
+    // Auto-login
+    const lr = await fetch(BASE + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const ld = await lr.json();
+    if (lr.ok) {
+      localStorage.setItem('pg_token',    ld.token);
+      localStorage.setItem('pg_username', ld.username);
+      setTimeout(() => { window.location.href = '/app'; }, 900);
+    }
+  } catch (e) {
+    showAlert('reg-alert', 'error', 'Cannot reach server. Is Flask running?');
+  } finally {
+    setLoading('btn-reg', 'spin-reg', false);
+    document.getElementById('btn-reg-text').textContent = 'Create account';
+  }
+}
+
+// If already logged in with a VALID token, skip straight to app
+const existingToken = localStorage.getItem('pg_token');
+if (existingToken) {
+  fetch(BASE + '/monitor/status', {
+    headers: { 'X-Auth-Token': existingToken }
+  }).then(r => {
+    if (r.ok) {
+      window.location.href = '/app';
+    } else {
+      // Token is stale/invalid — clear it so we don't loop
+      localStorage.removeItem('pg_token');
+      localStorage.removeItem('pg_username');
+    }
+  }).catch(() => {
+    // Server unreachable — stay on login, clear stale token
+    localStorage.removeItem('pg_token');
+    localStorage.removeItem('pg_username');
+  });
+}
+</script>
+</body>
+</html>

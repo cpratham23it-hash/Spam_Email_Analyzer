@@ -1,0 +1,7 @@
+{
+  "0": "safe",
+  "1": "phishing",
+  "best_model": "SGD Classifier",
+  "f1_macro": 0.9919,
+  "trained_at": "2026-05-24T00:27:21.764863"
+}

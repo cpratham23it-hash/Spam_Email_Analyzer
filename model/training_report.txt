@@ -1,0 +1,41 @@
+=== Logistic Regression ===
+  Model       : Logistic Regression
+  Accuracy    : 98.94%
+  ROC-AUC     : 0.9990
+  F1 (macro)  : 0.9894
+
+              precision    recall  f1-score   support
+
+        Safe       0.99      0.99      0.99     13005
+    Phishing       0.99      0.99      0.99     14243
+
+    accuracy                           0.99     27248
+   macro avg       0.99      0.99      0.99     27248
+weighted avg       0.99      0.99      0.99     27248
+
+  Confusion matrix:
+                Predicted
+                Safe    Phishing
+  Actual Safe    12862     143
+  Actual Phish     145   14098
+
+=== SGD Classifier ===
+  Model       : SGD Classifier
+  Accuracy    : 99.19%
+  ROC-AUC     : 0.9994
+  F1 (macro)  : 0.9919
+
+              precision    recall  f1-score   support
+
+        Safe       0.99      0.99      0.99     13005
+    Phishing       0.99      0.99      0.99     14243
+
+    accuracy                           0.99     27248
+   macro avg       0.99      0.99      0.99     27248
+weighted avg       0.99      0.99      0.99     27248
+
+  Confusion matrix:
+                Predicted
+                Safe    Phishing
+  Actual Safe    12902     103
+  Actual Phish     117   14126

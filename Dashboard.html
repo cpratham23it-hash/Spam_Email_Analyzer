@@ -332,9 +332,18 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ── Auth guard ─────────────────────────────────────────────────────────
+const TOKEN = localStorage.getItem('pg_token');
+if (!TOKEN) { window.location.href = '/'; }
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'X-Auth-Token': TOKEN };
+}
+
 async function poll() {
   try {
-    const r = await fetch('/api/dashboard');
+    const r = await fetch('/api/dashboard', { headers: authHeaders() });
+    if (r.status === 401) { window.location.href = '/'; return; }
     if (!r.ok) return;
     const data = await r.json();
     allScans = data.scans || [];
