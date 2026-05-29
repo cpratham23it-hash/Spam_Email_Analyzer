@@ -1,22 +1,54 @@
 """
-PhishGuard – Flask API  (v3 – auth + live monitor control)
-===========================================================
-New in v3:
-  • /register  – create account (stored in users.json)
-  • /login     – returns a session token
-  • /logout    – invalidates token
-  • /monitor/start  – start background IMAP thread for logged-in user
-  • /monitor/stop   – stop it
-  • /monitor/status – current state
-  • All existing /analyze, /api/dashboard, /health routes unchanged
+PhishGuard – Flask API  (v4 – MongoDB integration)
+====================================================
+Changes from v3:
+  • MongoDB replaces users.json  → users stored in db.users collection
+  • MongoDB replaces in-memory deque/stats → scans stored in db.scans
+  • Stats are computed live via MongoDB aggregation (persist across restarts)
+  • /api/dashboard now reads from MongoDB (last 200 scans, live stats)
+  • /api/scans/<id>  – fetch a single scan document by Mongo _id
+  • All auth, monitor, analyze routes unchanged in behaviour
+  • Graceful fallback: if MongoDB is unreachable the app still starts
+    (ML + rules analysis works; dashboard shows empty state)
+
+MongoDB URI: set env var  MONGO_URI  or defaults to localhost:27017
+Database   : phishguard
+Collections: users, scans
 """
 
 from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 import re, os, json, logging, hashlib, secrets, threading
 from datetime import datetime
-from collections import deque
 from functools import wraps
+
+# ── MongoDB setup ───────────────────────────────────────────────────────
+try:
+    from pymongo import MongoClient, DESCENDING
+    from pymongo.errors import ConnectionFailure, OperationFailure
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+    _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    _mongo_client.admin.command("ping")          # test connection
+    _db        = _mongo_client["phishguard"]
+    _users_col = _db["users"]
+    _scans_col = _db["scans"]
+
+    # Indexes for fast lookups
+    _users_col.create_index("username", unique=True)
+    _scans_col.create_index([("created_at", DESCENDING)])
+    _scans_col.create_index("user")
+    _scans_col.create_index("risk")
+
+    MONGO_READY = True
+    print("  [MongoDB] Connected → phishguard database")
+
+except Exception as _me:
+    MONGO_READY = False
+    _db = _users_col = _scans_col = None
+    print(f"  [MongoDB] Unavailable ({_me}) – falling back to users.json / in-memory")
 
 # ── ML (optional) ──────────────────────────────────────────────────────
 try:
@@ -58,13 +90,23 @@ app = Flask(__name__, static_folder=".")
 CORS(app, supports_credentials=True)
 logging.basicConfig(level=logging.INFO)
 
-scan_log = deque(maxlen=200)
-stats    = {"total": 0, "high": 0, "medium": 0, "low": 0}
+# In-memory fallback (used only when MongoDB is down)
+from collections import deque
+_fallback_scan_log = deque(maxlen=200)
+_fallback_stats    = {"total": 0, "high": 0, "medium": 0, "low": 0}
 
-# ── Persistent user store ───────────────────────────────────────────────
+# ── User store helpers (Mongo-first, JSON fallback) ─────────────────────
 USERS_FILE = "users.json"
 
 def _load_users():
+    """Return dict keyed by username."""
+    if MONGO_READY:
+        try:
+            docs = list(_users_col.find({}, {"_id": 0}))
+            return {d["username"]: d for d in docs}
+        except Exception:
+            pass
+    # JSON fallback
     if os.path.exists(USERS_FILE):
         try:
             with open(USERS_FILE) as f:
@@ -73,17 +115,110 @@ def _load_users():
             pass
     return {}
 
-def _save_users(users):
+def _get_user(username: str):
+    """Fetch a single user doc."""
+    if MONGO_READY:
+        try:
+            return _users_col.find_one({"username": username}, {"_id": 0})
+        except Exception:
+            pass
+    return _load_users().get(username)
+
+def _save_user(username: str, doc: dict):
+    """Upsert a user document."""
+    if MONGO_READY:
+        try:
+            doc["username"] = username
+            _users_col.update_one(
+                {"username": username},
+                {"$set": doc},
+                upsert=True,
+            )
+            return
+        except Exception as e:
+            print(f"  [MongoDB] _save_user error: {e}")
+    # JSON fallback
+    users = _load_users()
+    users[username] = doc
     with open(USERS_FILE, "w") as f:
         json.dump(users, f, indent=2)
 
-def _hash_pw(password):
+def _user_exists(username: str) -> bool:
+    if MONGO_READY:
+        try:
+            return _users_col.count_documents({"username": username}) > 0
+        except Exception:
+            pass
+    return username in _load_users()
+
+def _hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# In-memory session store  {token: username}
+# ── Scan store helpers (Mongo-first, deque fallback) ────────────────────
+
+def _save_scan(entry: dict):
+    """Persist a scan entry to MongoDB (or fallback deque)."""
+    if MONGO_READY:
+        try:
+            doc = dict(entry)
+            doc["created_at"] = datetime.utcnow()
+            result = _scans_col.insert_one(doc)
+            entry["_id"] = str(result.inserted_id)
+            return
+        except Exception as e:
+            print(f"  [MongoDB] _save_scan error: {e}")
+    _fallback_scan_log.appendleft(entry)
+
+def _get_scans(limit: int = 200):
+    """Return the most recent scans as plain dicts."""
+    if MONGO_READY:
+        try:
+            cursor = _scans_col.find(
+                {}, {"_id": 1, "id": 1, "time": 1, "date": 1,
+                     "sender": 1, "subject": 1, "risk": 1,
+                     "risk_score": 1, "threats": 1, "source": 1,
+                     "mode": 1, "user": 1}
+            ).sort("created_at", DESCENDING).limit(limit)
+            docs = []
+            for d in cursor:
+                d["_id"] = str(d["_id"])
+                docs.append(d)
+            return docs
+        except Exception as e:
+            print(f"  [MongoDB] _get_scans error: {e}")
+    return list(_fallback_scan_log)
+
+def _get_stats():
+    """Compute live stats from MongoDB aggregation, or return in-memory fallback."""
+    if MONGO_READY:
+        try:
+            pipeline = [
+                {"$group": {
+                    "_id": "$risk",
+                    "count": {"$sum": 1}
+                }}
+            ]
+            agg = {doc["_id"]: doc["count"] for doc in _scans_col.aggregate(pipeline)}
+            total = sum(agg.values())
+            return {
+                "total":  total,
+                "high":   agg.get("high",   0),
+                "medium": agg.get("medium", 0),
+                "low":    agg.get("low",    0),
+            }
+        except Exception as e:
+            print(f"  [MongoDB] _get_stats error: {e}")
+    return dict(_fallback_stats)
+
+def _increment_fallback_stats(risk: str):
+    """Only used in fallback (no-Mongo) mode."""
+    _fallback_stats["total"] += 1
+    _fallback_stats[risk]    += 1
+
+# ── In-memory session store  {token: username} ─────────────────────────
 sessions = {}
 
-# ── Auth helpers ────────────────────────────────────────────────────────
+# ── Auth decorator ──────────────────────────────────────────────────────
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -163,9 +298,6 @@ def _get_mid(msg):
     return "|".join([msg.get("From",""), msg.get("Date",""), msg.get("Subject","")])
 
 # ── Per-user monitor state ──────────────────────────────────────────────
-# { username: { "thread": Thread, "stop_event": Event,
-#               "status": "running"|"stopped"|"error",
-#               "last_error": str, "emails_scanned": int } }
 monitor_state = {}
 monitor_lock  = threading.Lock()
 
@@ -178,7 +310,7 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
         print(f"  [monitor:{username}] {msg}", flush=True)
 
     with monitor_lock:
-        monitor_state[username]["status"] = "running"
+        monitor_state[username]["status"]     = "running"
         monitor_state[username]["last_error"] = ""
 
     while not stop_event.is_set():
@@ -223,9 +355,7 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                             result = analyze_email(sender, subject, body, links, "")
                             risk   = result.get("risk", "low")
 
-                            # Log to shared dashboard
                             entry = {
-                                "id":         stats["total"] + 1,
                                 "time":       datetime.now().strftime("%H:%M:%S"),
                                 "date":       datetime.now().strftime("%d %b %Y"),
                                 "sender":     sender[:80],
@@ -236,9 +366,9 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                                 "source":     "monitor",
                                 "user":       username,
                             }
-                            scan_log.appendleft(entry)
-                            stats["total"] += 1
-                            stats[risk]    += 1
+                            _save_scan(entry)
+                            if not MONGO_READY:
+                                _increment_fallback_stats(risk)
 
                             with monitor_lock:
                                 monitor_state[username]["emails_scanned"] += 1
@@ -254,7 +384,7 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                 except Exception as e:
                     _log(f"Inbox check error: {e}")
 
-                stop_event.wait(30)  # poll every 30s
+                stop_event.wait(30)
                 poll += 1
 
         except ConnectionError as e:
@@ -268,9 +398,9 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
             err = f"IMAP auth error: {e}"
             _log(err)
             with monitor_lock:
-                monitor_state[username]["status"]     = "error"
-                monitor_state[username]["last_error"]  = err
-            break  # bad credentials → stop, don't retry
+                monitor_state[username]["status"]    = "error"
+                monitor_state[username]["last_error"] = err
+            break
 
         except Exception as e:
             _log(f"Unexpected: {e}. Retry in {backoff}s")
@@ -398,7 +528,7 @@ def analyze_email(sender, subject, body, links, headers):
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.get_json() or {}
+    data     = request.get_json() or {}
     username = (data.get("username") or "").strip().lower()
     password = data.get("password", "")
     gmail    = (data.get("gmail") or "").strip()
@@ -412,18 +542,15 @@ def register():
         return jsonify({"error": "Invalid Gmail address"}), 400
     if len(app_pw) != 16:
         return jsonify({"error": "App password must be exactly 16 characters (no spaces)"}), 400
-
-    users = _load_users()
-    if username in users:
+    if _user_exists(username):
         return jsonify({"error": "Username already taken"}), 409
 
-    users[username] = {
+    _save_user(username, {
         "password_hash": _hash_pw(password),
         "gmail":         gmail,
         "app_password":  app_pw,
         "created_at":    datetime.now().isoformat(),
-    }
-    _save_users(users)
+    })
     return jsonify({"message": "Account created successfully"}), 201
 
 
@@ -433,18 +560,13 @@ def login():
     username = (data.get("username") or "").strip().lower()
     password = data.get("password", "")
 
-    users = _load_users()
-    user  = users.get(username)
+    user = _get_user(username)
     if not user or user["password_hash"] != _hash_pw(password):
         return jsonify({"error": "Invalid username or password"}), 401
 
     token = secrets.token_hex(32)
     sessions[token] = username
-    return jsonify({
-        "token":    token,
-        "username": username,
-        "message":  "Login successful",
-    })
+    return jsonify({"token": token, "username": username, "message": "Login successful"})
 
 
 @app.route("/logout", methods=["POST"])
@@ -461,16 +583,15 @@ def logout():
 @require_auth
 def monitor_start():
     username = g.username
-    users    = _load_users()
-    user     = users.get(username, {})
+    user     = _get_user(username) or {}
 
     with monitor_lock:
         state = monitor_state.get(username, {})
         if state.get("status") == "running":
             return jsonify({"message": "Monitor already running", "status": "running"})
 
-    gmail   = user.get("gmail", "")
-    app_pw  = user.get("app_password", "")
+    gmail  = user.get("gmail", "")
+    app_pw = user.get("app_password", "")
     if not gmail or not app_pw:
         return jsonify({"error": "Gmail credentials not found for this account"}), 400
 
@@ -522,7 +643,7 @@ def monitor_status():
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  Routes — existing
+#  Routes — Existing + new scan fetch
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/")
 def index():
@@ -535,6 +656,7 @@ def main_app():
 @app.route("/dashboard")
 def dashboard():
     return send_from_directory(".", "Dashboard.html")
+
 
 @app.route("/analyze", methods=["POST"])
 @require_auth
@@ -550,9 +672,9 @@ def analyze():
     source  = data.get("source",  "manual")
     if not sender and not subject and not body:
         return jsonify({"error": "Provide at least sender, subject, or body"}), 400
+
     result = analyze_email(sender, subject, body, links, headers)
     entry  = {
-        "id":         stats["total"] + 1,
         "time":       datetime.now().strftime("%H:%M:%S"),
         "date":       datetime.now().strftime("%d %b %Y"),
         "sender":     sender[:80],
@@ -564,28 +686,57 @@ def analyze():
         "mode":       result["mode"],
         "user":       g.username,
     }
-    scan_log.appendleft(entry)
-    stats["total"] += 1
-    stats[result["risk"]] += 1
+    _save_scan(entry)
+    if not MONGO_READY:
+        _increment_fallback_stats(result["risk"])
+
     return jsonify(result)
+
 
 @app.route("/api/dashboard", methods=["GET"])
 @require_auth
 def api_dashboard():
-    return jsonify({"stats": dict(stats), "scans": list(scan_log)})
+    return jsonify({
+        "stats":        _get_stats(),
+        "scans":        _get_scans(200),
+        "mongo_ready":  MONGO_READY,
+    })
+
+
+@app.route("/api/scans/<scan_id>", methods=["GET"])
+@require_auth
+def get_scan(scan_id):
+    """Fetch a single scan document by MongoDB _id."""
+    if not MONGO_READY:
+        return jsonify({"error": "MongoDB not available"}), 503
+    try:
+        doc = _scans_col.find_one({"_id": ObjectId(scan_id)})
+        if not doc:
+            return jsonify({"error": "Scan not found"}), 404
+        doc["_id"] = str(doc["_id"])
+        if "created_at" in doc:
+            doc["created_at"] = doc["created_at"].isoformat()
+        return jsonify(doc)
+    except InvalidId:
+        return jsonify({"error": "Invalid scan ID"}), 400
+
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
-        "status":   "ok",
-        "ml_ready": ML_READY,
-        "mode":     "ML + rules" if ML_READY else "rules only",
+        "status":      "ok",
+        "ml_ready":    ML_READY,
+        "mode":        "ML + rules" if ML_READY else "rules only",
+        "mongo_ready": MONGO_READY,
+        "mongo_uri":   MONGO_URI if MONGO_READY else None,
     })
 
+
 if __name__ == "__main__":
-    print("\n  PhishGuard v3  running:")
+    print("\n  PhishGuard v4  running:")
     print("  Login     -> http://localhost:5000")
     print("  App       -> http://localhost:5000/app")
     print("  Dashboard -> http://localhost:5000/dashboard")
-    print(f"  ML mode   -> {'enabled' if ML_READY else 'disabled'}\n")
+    print(f"  ML mode   -> {'enabled' if ML_READY else 'disabled'}")
+    print(f"  MongoDB   -> {'connected' if MONGO_READY else 'fallback (json/memory)'}\n")
     app.run(debug=True, port=5000)

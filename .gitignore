@@ -1,0 +1,20 @@
+# Datasets
+*.csv
+phishing_email.csv
+CEAS_08.csv
+Enron.csv
+Ling.csv
+Nazario.csv
+Nigerian_Fraud.csv
+SpamAssasin.csv
+
+# Trained model files (too large for GitHub)
+model/model.pkl
+model/vectorizer.pkl
+
+# Python cache
+__pycache__/
+*.pyc
+
+# User data
+users.json

@@ -1,0 +1,1 @@
+FeatureStatusRule-based header anomaly detection✅ Partial (no routing chain)URL lexical analysis✅TF-IDF + ML classification✅Weighted risk scoring✅ Partial (missing user-interview score)Flask + Python backend✅HTML/CSS/JS frontend✅Scikit-learn✅MongoDB❌ Not implementedAutomated incident report to IT team❌ Not implementedUser-interview score component❌ Not implementedDomain valid
