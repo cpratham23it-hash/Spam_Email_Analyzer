@@ -240,6 +240,16 @@
     <button class="btn-monitor start" id="btn-monitor" onclick="toggleMonitor()" disabled>…</button>
   </div>
 
+  <!-- IT Email config bar -->
+  <div id="it-email-bar" style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 16px;margin-bottom:1.5rem;flex-wrap:wrap;">
+    <span style="font-size:11px;font-family:var(--mono);color:var(--muted);">🚨 IT CYBERCELL EMAIL</span>
+    <input id="it-email-input" type="email" placeholder="it-team@yourorg.com"
+      style="flex:1;min-width:200px;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 12px;outline:none;"
+      onkeydown="if(event.key==='Enter')saveItEmail()"/>
+    <button onclick="saveItEmail()" style="padding:7px 16px;background:var(--accent);color:#000;border:none;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:700;cursor:pointer;">Save</button>
+    <span id="it-email-status" style="font-size:11px;font-family:var(--mono);color:var(--muted);"></span>
+  </div>
+
   <div class="view-tabs">
     <button class="view-tab active" onclick="switchView('analyze',this)">Analyze email</button>
     <button class="view-tab"        onclick="switchView('history',this)">History</button>
@@ -763,6 +773,45 @@ function buildDetailHTML(h) {
       ${bdSection}
     </div>`;
 }
+
+// ── IT Email config ──────────────────────────────────────────────────────
+async function loadItEmail() {
+  try {
+    const r = await fetch(BASE+'/config/it-email', {headers:authH()});
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.it_email && d.it_email !== 'it-team@yourcompany.com') {
+      document.getElementById('it-email-input').value = d.it_email;
+      document.getElementById('it-email-status').textContent = 'Current: ' + d.it_email;
+    }
+  } catch(e) {}
+}
+
+async function saveItEmail() {
+  const email = document.getElementById('it-email-input').value.trim();
+  const status = document.getElementById('it-email-status');
+  if (!email || !email.includes('@')) {
+    status.textContent = 'Invalid email'; status.style.color = 'var(--red)'; return;
+  }
+  try {
+    const r = await fetch(BASE+'/config/it-email', {
+      method:'POST', headers:authH(),
+      body: JSON.stringify({it_email: email}),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      status.textContent = '✓ Saved — reports will be sent to ' + email;
+      status.style.color = 'var(--accent)';
+    } else {
+      status.textContent = d.error || 'Failed';
+      status.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    status.textContent = 'Error saving'; status.style.color = 'var(--red)';
+  }
+}
+
+loadItEmail();
 
 // ── Utility ───────────────────────────────────────────────────────────────
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}

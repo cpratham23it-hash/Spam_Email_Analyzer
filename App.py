@@ -46,6 +46,12 @@ except Exception as _me:
     _db = _users_col = _scans_col = _manual_scans_col = None
     print(f"  [MongoDB] Unavailable ({_me}) – falling back to in-memory")
 
+from incident_report import send_incident_report, build_report_html
+
+# ── IT Team email config ─────────────────────────────────────────────────
+IT_EMAIL = os.environ.get("IT_EMAIL", "it-team@yourcompany.com")
+
+
 # ── ML ───────────────────────────────────────────────────────────────────
 try:
     import joblib, numpy as np
@@ -439,6 +445,33 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                             if not MONGO_READY: _increment_fallback_stats(risk)
                             with monitor_lock: monitor_state[username]["emails_scanned"] += 1
                             _log(f"{risk.upper()} ({result.get('risk_score',0)}/100) — {subject[:50]}")
+                            if risk == "high":
+                                user_doc = _get_user(username) or {}
+                                report_entry = dict(entry)
+                                report_entry["domain_results"] = result.get("domain_results", [])
+                                send_incident_report(
+                                    scan             = report_entry,
+                                    reporter         = username,
+                                    gmail_address    = user_doc.get("gmail", ""),
+                                    app_password     = user_doc.get("app_password", ""),
+                                    it_email         = IT_EMAIL,
+                                    scans_col        = _scans_col,
+                                    manual_scans_col = _manual_scans_col,
+                                )
+                            # Send incident report for high-risk monitor emails
+                            if risk == "high":
+                                user_doc = _get_user(username) or {}
+                                report_entry = dict(entry)
+                                report_entry["domain_results"] = result.get("domain_results", [])
+                                send_incident_report(
+                                    scan             = report_entry,
+                                    reporter         = username,
+                                    gmail_address    = user_doc.get("gmail", ""),
+                                    app_password     = user_doc.get("app_password", ""),
+                                    it_email         = IT_EMAIL,
+                                    scans_col        = _scans_col,
+                                    manual_scans_col = _manual_scans_col,
+                                )
                         except Exception as e: _log(f"Error on message: {e}"); continue
                 except imaplib.IMAP4.abort as e: raise ConnectionError(f"IMAP abort: {e}")
                 except Exception as e: _log(f"Inbox check error: {e}")
@@ -779,6 +812,16 @@ def _interview_score(answers):
     return delta, threats, explanations
 
 # ══════════════════════════════════════════════════════════════════════
+#  Incident report engine
+# ══════════════════════════════════════════════════════════════════════
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text       import MIMEText
+from email.mime.base       import MIMEBase
+from email                 import encoders
+import io
+
+# ══════════════════════════════════════════════════════════════════════
 #  Auth routes
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/register", methods=["POST"])
@@ -1005,6 +1048,39 @@ def analyze_interview():
         _save_manual_scan(entry)
         if not MONGO_READY: _increment_fallback_stats(risk)
 
+    # ── Auto-generate incident report for medium/high risk ────────────────
+    if risk in ("medium", "high"):
+        user_doc = _get_user(g.username) or {}
+        full_scan = {
+            "_id":              scan_id,
+            "sender":           base.get("_sender", base.get("sender", "")),
+            "subject":          base.get("_subject", base.get("subject", "")),
+            "body":             base.get("_body", ""),
+            "links":            base.get("_links", ""),
+            "risk":             risk,
+            "risk_score":       final_score,
+            "threats":          merged_threats,
+            "explanations":     merged_explanations,
+            "link_results":     base.get("link_results", []),
+            "domain_results":   base.get("domain_results", []),
+            "ml_prob":          base.get("ml_prob"),
+            "mode":             base.get("mode", "rules only") + " + interview",
+            "source":           "manual+interview",
+            "interview_answers":answers,
+            "score_breakdown":  score_breakdown,
+            "time":             datetime.now().strftime("%H:%M:%S"),
+            "date":             datetime.now().strftime("%d %b %Y"),
+        }
+        send_incident_report(
+            scan             = full_scan,
+            reporter         = g.username,
+            gmail_address    = user_doc.get("gmail", ""),
+            app_password     = user_doc.get("app_password", ""),
+            it_email         = IT_EMAIL,
+            scans_col        = _scans_col,
+            manual_scans_col = _manual_scans_col,
+        )
+
     result = dict(base)
     result.update({
         "risk": risk, "risk_score": final_score,
@@ -1049,6 +1125,21 @@ def get_scan(scan_id):
         return jsonify(doc)
     except InvalidId:
         return jsonify({"error": "Invalid scan ID"}), 400
+
+
+@app.route("/config/it-email", methods=["GET", "POST"])
+@require_auth
+def it_email_config():
+    global IT_EMAIL
+    if request.method == "POST":
+        data  = request.get_json() or {}
+        email = (data.get("it_email") or "").strip()
+        if not email or "@" not in email:
+            return jsonify({"error": "Invalid email address"}), 400
+        IT_EMAIL = email
+        print(f"  [Config] IT_EMAIL set to {IT_EMAIL}", flush=True)
+        return jsonify({"message": "IT email updated", "it_email": IT_EMAIL})
+    return jsonify({"it_email": IT_EMAIL})
 
 
 @app.route("/health", methods=["GET"])
