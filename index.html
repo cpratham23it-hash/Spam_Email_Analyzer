@@ -471,6 +471,16 @@ function showResult(r, isPrelim) {
         r.link_results.map(l=>`<div class="link-item"><div class="link-dot ${l.status}"></div><span class="link-url">${esc(l.url)}</span><span class="link-status ${l.status}">${esc(l.reason)}</span></div>`).join('')
       }</div></div>`:'';
   const mlBadge=r.ml_prob!=null?`<span style="font-size:11px;color:var(--muted);font-family:var(--mono)">ML: ${r.ml_prob}% · ${esc(r.mode||'')}</span>`:'';
+  const domainHTML=(r.domain_results&&r.domain_results.length>0)
+    ?`<div class="result-section"><h3>Domain validation</h3><div class="links-list">${
+        r.domain_results.map(d=>{
+          const st=!d.exists?'danger':(d.age_days!==null&&d.age_days<30)?'danger':(d.age_days!==null&&d.age_days<180)?'warn':'safe';
+          const age=d.age_days!==null?d.age_days+'d old':'age unknown';
+          const label=!d.exists?'No DNS record':age;
+          const badge=d.kind==='sender'?'✉':'🔗';
+          return '<div class="link-item"><div class="link-dot '+st+'"></div><span class="link-url">'+badge+' '+esc(d.domain)+'</span><span style="font-size:10px;color:var(--muted);margin-right:6px;">'+(d.ip?esc(d.ip):'no IP')+'</span><span class="link-status '+st+'">'+label+'</span></div>';
+        }).join('')
+      }</div></div>`:'';
   const prelimBanner=isPrelim?`<div class="prelim-banner"><div class="prelim-dot"></div>PRELIMINARY — complete the context interview to refine this score</div>`:'';
   const bdHTML=r.score_breakdown?`<div class="score-breakdown">
     <h4>Score breakdown</h4>
@@ -505,6 +515,7 @@ function showResult(r, isPrelim) {
         ${r.threats.map(t=>`<span class="threat-tag ${t.type==='danger'?'':t.type}">${esc(t.label)}</span>`).join('')}
       </div></div>
       ${linksHTML}
+      ${domainHTML}
       <div class="result-section"><h3>Explanation</h3>
         <div class="explanation">${r.explanations.map(e=>`<p style="margin-bottom:6px">• ${esc(e)}</p>`).join('')}</div>
       </div>

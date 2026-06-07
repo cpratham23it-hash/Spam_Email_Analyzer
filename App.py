@@ -466,6 +466,175 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
             monitor_state[username]["status"] = "stopped"
     _log("Monitor stopped.")
 
+# ── Domain validation engine ─────────────────────────────────────────────
+import socket
+import threading as _threading
+
+# Cache results so repeated domains don't cause extra DNS calls
+_domain_cache = {}
+_domain_cache_lock = _threading.Lock()
+
+def _extract_domain(value: str) -> str:
+    """Pull the bare domain from a URL or email address."""
+    value = value.strip().lower()
+    # URL
+    if value.startswith("http"):
+        parts = value.split("/")
+        return parts[2] if len(parts) > 2 else value
+    # Email  user@domain
+    if "@" in value:
+        return value.split("@")[-1].split(">")[0].strip()
+    return value
+
+
+def _dns_check(domain: str) -> dict:
+    """
+    Check whether a domain resolves (A record) and has mail records (MX).
+    Returns a dict with keys: exists, has_mx, ip.
+    Results are cached to avoid repeat lookups in the same request.
+    """
+    domain = domain.strip().rstrip(".")
+    if not domain or len(domain) < 4:
+        return {"exists": False, "has_mx": False, "ip": None}
+
+    with _domain_cache_lock:
+        if domain in _domain_cache:
+            return _domain_cache[domain]
+
+    result = {"exists": False, "has_mx": False, "ip": None}
+    try:
+        ip = socket.gethostbyname(domain)
+        result["exists"] = True
+        result["ip"]     = ip
+    except Exception:
+        pass
+
+    # MX check via socket (no external lib needed)
+    try:
+        import dns.resolver  # optional – dnspython
+        answers = dns.resolver.resolve(domain, "MX", lifetime=2)
+        result["has_mx"] = len(answers) > 0
+    except Exception:
+        # dnspython not installed or no MX — not critical
+        result["has_mx"] = result["exists"]   # assume MX if domain resolves
+
+    with _domain_cache_lock:
+        _domain_cache[domain] = result
+    return result
+
+
+def _whois_age_days(domain: str) -> int | None:
+    """
+    Return the domain age in days.
+    Tries python-whois then whois package — returns None if neither available.
+    """
+    w_obj = None
+    try:
+        # try python-whois (pip install python-whois)
+        import pythonwhois as _pw
+        w_obj = _pw.get_whois(domain)
+        created = w_obj.get("creation_date", [None])[0] if w_obj else None
+    except Exception:
+        pass
+
+    if w_obj is None:
+        try:
+            # try whois (pip install whois)
+            import whois as _w
+            w_obj = _w.whois(domain)
+            created = w_obj.creation_date if w_obj else None
+            if isinstance(created, list): created = created[0]
+        except Exception:
+            return None
+
+    try:
+        if created is None: return None
+        from datetime import timezone
+        if hasattr(created, "tzinfo"):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - created).days
+        return age
+    except Exception:
+        return None
+
+
+def _domain_validation_score(sender: str, links: str) -> tuple[int, list, list]:
+    """
+    Run DNS + WHOIS checks on the sender domain and all link domains.
+    Returns (score_delta, extra_threats, extra_explanations).
+    Uses a 3-second timeout per domain via threading so slow DNS never
+    blocks the request for more than ~6 seconds total.
+    """
+    delta        = 0
+    threats      = []
+    explanations = []
+    domain_results = []
+
+    # Collect all domains to check
+    domains_to_check = []
+    sender_domain = _extract_domain(sender)
+    if sender_domain:
+        domains_to_check.append(("sender", sender_domain))
+
+    for url in [l.strip() for l in links.split("\n") if l.strip()]:
+        d = _extract_domain(url)
+        if d and d not in [x[1] for x in domains_to_check]:
+            domains_to_check.append(("link", d))
+
+    def _check_one(kind, domain, results_list):
+        dns = _dns_check(domain)
+        age = None
+        if dns["exists"]:
+            age = _whois_age_days(domain)
+        results_list.append((kind, domain, dns, age))
+
+    # Run all checks in parallel with 4-second cap
+    threads = []
+    raw_results = []
+    for kind, domain in domains_to_check[:6]:   # cap at 6 domains
+        t = _threading.Thread(target=_check_one, args=(kind, domain, raw_results), daemon=True)
+        threads.append(t); t.start()
+    for t in threads:
+        t.join(timeout=4)
+
+    for kind, domain, dns, age in raw_results:
+        entry = {"domain": domain, "kind": kind,
+                 "exists": dns["exists"], "ip": dns["ip"],
+                 "has_mx": dns["has_mx"], "age_days": age}
+        domain_results.append(entry)
+
+        if kind == "sender":
+            if not dns["exists"]:
+                delta += 30
+                threats.append({"label": "Sender domain does not exist (DNS)", "type": "danger"})
+                explanations.append(f"Sender domain '{domain}' has no DNS A record — likely a fake/spoofed domain.")
+            elif age is not None and age < 30:
+                delta += 25
+                threats.append({"label": f"Sender domain very new ({age}d old)", "type": "danger"})
+                explanations.append(f"Sender domain '{domain}' was registered only {age} days ago — newly registered domains are a strong phishing indicator.")
+            elif age is not None and age < 180:
+                delta += 12
+                threats.append({"label": f"Sender domain recently registered ({age}d)", "type": "warn"})
+                explanations.append(f"Sender domain '{domain}' is only {age} days old, which is suspicious.")
+
+        elif kind == "link":
+            if not dns["exists"]:
+                delta += 20
+                threats.append({"label": f"Link domain does not resolve: {domain}", "type": "danger"})
+                explanations.append(f"Link domain '{domain}' has no DNS record — possible dead or fake domain.")
+            elif age is not None and age < 30:
+                delta += 20
+                threats.append({"label": f"Link domain very new ({age}d): {domain}", "type": "danger"})
+                explanations.append(f"Link domain '{domain}' registered {age} days ago — newly created domains are commonly used in phishing campaigns.")
+            elif age is not None and age < 180:
+                delta += 8
+                threats.append({"label": f"Link domain recently registered ({age}d)", "type": "warn"})
+                explanations.append(f"Link domain '{domain}' is {age} days old.")
+
+    return min(delta, 40), threats, explanations, domain_results
+
+
 # ── Analysis engine ───────────────────────────────────────────────────────
 def _ml_score(text):
     if not ML_READY or not text.strip(): return 0.5, 0.0
@@ -533,9 +702,17 @@ def _rule_score(sender, subject, body, links, headers):
 
 def analyze_email(sender, subject, body, links, headers):
     r_score, threats, link_results, explanations = _rule_score(sender, subject, body, links, headers)
+
+    # ── Domain validation (DNS + WHOIS) ──────────────────────────────────
+    d_score, d_threats, d_explanations, domain_results = _domain_validation_score(sender, links)
+    threats      = d_threats + threats
+    explanations = d_explanations + explanations
+
     ml_prob, ml_conf = _ml_score(f"{sender} {subject} {body}")
     if ML_READY:
-        final_score = int(min(round(ml_prob * 100 * 0.60 + r_score * 0.40), 100))
+        # Weighted blend: 50% ML + 30% rules + 20% domain validation
+        raw = ml_prob * 100 * 0.50 + r_score * 0.30 + (r_score + d_score) * 0.20
+        final_score = int(min(round(raw), 100))
         if ml_prob >= 0.80 and ml_conf >= 0.6:
             threats.insert(0, {"label": "ML: high phishing probability", "type": "danger"})
             explanations.insert(0, f"ML confidence {ml_conf*100:.0f}% — phishing prob {ml_prob*100:.0f}%.")
@@ -543,19 +720,24 @@ def analyze_email(sender, subject, body, links, headers):
             threats.insert(0, {"label": "ML: likely safe email", "type": "info"})
             explanations.insert(0, f"ML confidence {ml_conf*100:.0f}% — safe prob {(1-ml_prob)*100:.0f}%.")
     else:
-        final_score = r_score
+        # Rules + domain validation only
+        final_score = min(r_score + d_score, 100)
+
     if final_score < 30:   risk, risk_score = "low",    max(final_score, 5)
     elif final_score < 65: risk, risk_score = "medium", final_score
     else:                  risk, risk_score = "high",   min(final_score, 98)
+
     if not threats:
         threats.append({"label": "No threats detected", "type": "info"})
         explanations.append("No phishing indicators found.")
+
     return {
         "risk": risk, "risk_score": risk_score,
         "threats": threats, "link_results": link_results,
         "explanations": explanations,
         "ml_prob": round(ml_prob * 100, 1) if ML_READY else None,
-        "mode": "ML + rules" if ML_READY else "rules only",
+        "mode": "ML + rules + domain validation" if ML_READY else "rules + domain validation",
+        "domain_results": domain_results,
     }
 
 # ── Interview scoring ─────────────────────────────────────────────────────
@@ -737,6 +919,7 @@ def analyze():
         "explanations":       result["explanations"],
         "link_results":       result["link_results"],
         "ml_prob":            result.get("ml_prob"),
+        "domain_results":     result.get("domain_results", []),
         "source":             "manual",
         "mode":               result["mode"],
         "user":               g.username,
