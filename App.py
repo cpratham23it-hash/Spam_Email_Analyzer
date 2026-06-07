@@ -48,6 +48,28 @@ except Exception as _me:
 
 from incident_report import send_incident_report, build_report_html
 
+# ── Desktop notifications ────────────────────────────────────────────────
+try:
+    from plyer import notification as _plyer_notification
+    PLYER_READY = True
+except ImportError:
+    PLYER_READY = False
+    print("  [Notify] plyer not installed — pip install plyer  (desktop popups disabled)")
+
+def _send_desktop_notification(title: str, message: str) -> None:
+    """Fire a desktop popup. Silently skips if plyer is unavailable."""
+    if not PLYER_READY:
+        return
+    try:
+        _plyer_notification.notify(
+            title=title,
+            message=message,
+            app_name="PhishGuard",
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"  [Notify] Desktop notification failed: {e}", flush=True)
+
 # ── IT Team email config ─────────────────────────────────────────────────
 IT_EMAIL = os.environ.get("IT_EMAIL", "it-team@yourcompany.com")
 
@@ -446,6 +468,21 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                             with monitor_lock: monitor_state[username]["emails_scanned"] += 1
                             _log(f"{risk.upper()} ({result.get('risk_score',0)}/100) — {subject[:50]}")
                             if risk == "high":
+                                # ── Desktop popup notification ────────────────
+                                risk_score = result.get("risk_score", 0)
+                                threat_labels = ", ".join(
+                                    (t["label"] if isinstance(t, dict) else str(t))
+                                    for t in result.get("threats", [])[:2]
+                                )
+                                notif_title   = f"⚠ PhishGuard: HIGH RISK email detected"
+                                notif_message = (
+                                    f"Score: {risk_score}/100\n"
+                                    f"From: {sender[:60]}\n"
+                                    f"Subject: {subject[:60]}\n"
+                                    f"{threat_labels}"
+                                )
+                                _send_desktop_notification(notif_title, notif_message)
+                                _log("[!] Desktop notification sent")
                                 user_doc = _get_user(username) or {}
                                 report_entry = dict(entry)
                                 report_entry["domain_results"] = result.get("domain_results", [])
@@ -458,20 +495,7 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                                     scans_col        = _scans_col,
                                     manual_scans_col = _manual_scans_col,
                                 )
-                            # Send incident report for high-risk monitor emails
-                            if risk == "high":
-                                user_doc = _get_user(username) or {}
-                                report_entry = dict(entry)
-                                report_entry["domain_results"] = result.get("domain_results", [])
-                                send_incident_report(
-                                    scan             = report_entry,
-                                    reporter         = username,
-                                    gmail_address    = user_doc.get("gmail", ""),
-                                    app_password     = user_doc.get("app_password", ""),
-                                    it_email         = IT_EMAIL,
-                                    scans_col        = _scans_col,
-                                    manual_scans_col = _manual_scans_col,
-                                )
+
                         except Exception as e: _log(f"Error on message: {e}"); continue
                 except imaplib.IMAP4.abort as e: raise ConnectionError(f"IMAP abort: {e}")
                 except Exception as e: _log(f"Inbox check error: {e}")
