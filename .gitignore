@@ -19,3 +19,4 @@ __pycache__/
 # User data
 users.json
 implementation.txt
+.env

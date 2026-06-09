@@ -10,9 +10,12 @@ PhishGuard – Flask API  (v5 – Full MongoDB persistence)
 
 from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
-import re, os, json, logging, hashlib, secrets, threading
-from datetime import datetime
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import re, os, json, logging, hashlib, secrets, threading, bcrypt
+from datetime import datetime, timedelta
 from functools import wraps
+from cryptography.fernet import Fernet
 
 # ── MongoDB ──────────────────────────────────────────────────────────────
 try:
@@ -47,28 +50,6 @@ except Exception as _me:
     print(f"  [MongoDB] Unavailable ({_me}) – falling back to in-memory")
 
 from incident_report import send_incident_report, build_report_html
-
-# ── Desktop notifications ────────────────────────────────────────────────
-try:
-    from plyer import notification as _plyer_notification
-    PLYER_READY = True
-except ImportError:
-    PLYER_READY = False
-    print("  [Notify] plyer not installed — pip install plyer  (desktop popups disabled)")
-
-def _send_desktop_notification(title: str, message: str) -> None:
-    """Fire a desktop popup. Silently skips if plyer is unavailable."""
-    if not PLYER_READY:
-        return
-    try:
-        _plyer_notification.notify(
-            title=title,
-            message=message,
-            app_name="PhishGuard",
-            timeout=10,
-        )
-    except Exception as e:
-        print(f"  [Notify] Desktop notification failed: {e}", flush=True)
 
 # ── IT Team email config ─────────────────────────────────────────────────
 IT_EMAIL = os.environ.get("IT_EMAIL", "it-team@yourcompany.com")
@@ -111,8 +92,60 @@ def _clean(text):
 
 # ── App ──────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=".")
-CORS(app, supports_credentials=True)
+
+# ── CORS – restrict to same origin only ──────────────────────────────────
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", "http://localhost:5000,http://127.0.0.1:5000"
+).split(",")
+CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
+
+# ── Rate limiter ─────────────────────────────────────────────────────────
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
 logging.basicConfig(level=logging.INFO)
+
+# ── Encryption key for sensitive fields (Gmail app passwords) ─────────────
+_RAW_KEY = os.environ.get("FIELD_ENCRYPT_KEY", "")
+if _RAW_KEY:
+    try:
+        _FERNET = Fernet(_RAW_KEY.encode())
+        ENCRYPT_READY = True
+    except Exception:
+        _FERNET = None
+        ENCRYPT_READY = False
+else:
+    # Auto-generate key on first run and save to .env
+    _gen_key = Fernet.generate_key().decode()
+    _FERNET  = Fernet(_gen_key.encode())
+    ENCRYPT_READY = True
+    # Persist to .env so it survives restarts
+    try:
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        existing = open(env_path).read() if os.path.exists(env_path) else ""
+        if "FIELD_ENCRYPT_KEY" not in existing:
+            with open(env_path, "a") as _ef:
+                _ef.write(f"\nFIELD_ENCRYPT_KEY={_gen_key}\n")
+            print("  [Security] Generated FIELD_ENCRYPT_KEY and saved to .env", flush=True)
+    except Exception as _ke:
+        print(f"  [Security] Could not persist FIELD_ENCRYPT_KEY: {_ke}", flush=True)
+
+def _encrypt(value: str) -> str:
+    if ENCRYPT_READY and value:
+        return _FERNET.encrypt(value.encode()).decode()
+    return value
+
+def _decrypt(value: str) -> str:
+    if ENCRYPT_READY and value:
+        try:
+            return _FERNET.decrypt(value.encode()).decode()
+        except Exception:
+            return value   # already plaintext (migration fallback)
+    return value
 
 from collections import deque
 _fallback_scan_log = deque(maxlen=200)
@@ -179,8 +212,17 @@ def _user_exists(username):
         except Exception: pass
     return username in _load_users()
 
-def _hash_pw(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+def _hash_pw(password: str) -> str:
+    """Hash password with bcrypt (salted, slow by design)."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+def _verify_pw(password: str, hashed: str) -> bool:
+    """Constant-time bcrypt verification. Falls back for legacy SHA-256 hashes."""
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except Exception:
+        # Legacy SHA-256 fallback – migrate on next login
+        return hashlib.sha256(password.encode()).hexdigest() == hashed
 
 # ── Scan helpers ─────────────────────────────────────────────────────────
 
@@ -331,16 +373,39 @@ def _increment_fallback_stats(risk):
     _fallback_stats["total"] += 1
     _fallback_stats[risk]    += 1
 
-# ── Sessions ─────────────────────────────────────────────────────────────
-sessions = {}
+# ── Sessions  {token: {username, expires_at}} ────────────────────────────
+sessions: dict = {}
+SESSION_TTL = timedelta(hours=8)   # tokens expire after 8 hours
+
+def _new_session(username: str) -> str:
+    token = secrets.token_hex(32)
+    sessions[token] = {
+        "username":   username,
+        "expires_at": datetime.utcnow() + SESSION_TTL,
+    }
+    return token
+
+def _purge_expired():
+    """Remove expired tokens (called on each auth check)."""
+    now = datetime.utcnow()
+    expired = [t for t, d in sessions.items() if d["expires_at"] < now]
+    for t in expired:
+        sessions.pop(t, None)
 
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get("X-Auth-Token") or request.args.get("token")
-        if not token or token not in sessions:
+        _purge_expired()
+        session = sessions.get(token) if token else None
+        if not session:
             return jsonify({"error": "Unauthorized"}), 401
-        g.username = sessions[token]
+        if session["expires_at"] < datetime.utcnow():
+            sessions.pop(token, None)
+            return jsonify({"error": "Session expired, please log in again"}), 401
+        # Slide the expiry window on activity
+        session["expires_at"] = datetime.utcnow() + SESSION_TTL
+        g.username = session["username"]
         g.token    = token
         return f(*args, **kwargs)
     return decorated
@@ -468,21 +533,6 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                             with monitor_lock: monitor_state[username]["emails_scanned"] += 1
                             _log(f"{risk.upper()} ({result.get('risk_score',0)}/100) — {subject[:50]}")
                             if risk == "high":
-                                # ── Desktop popup notification ────────────────
-                                risk_score = result.get("risk_score", 0)
-                                threat_labels = ", ".join(
-                                    (t["label"] if isinstance(t, dict) else str(t))
-                                    for t in result.get("threats", [])[:2]
-                                )
-                                notif_title   = f"⚠ PhishGuard: HIGH RISK email detected"
-                                notif_message = (
-                                    f"Score: {risk_score}/100\n"
-                                    f"From: {sender[:60]}\n"
-                                    f"Subject: {subject[:60]}\n"
-                                    f"{threat_labels}"
-                                )
-                                _send_desktop_notification(notif_title, notif_message)
-                                _log("[!] Desktop notification sent")
                                 user_doc = _get_user(username) or {}
                                 report_entry = dict(entry)
                                 report_entry["domain_results"] = result.get("domain_results", [])
@@ -490,12 +540,11 @@ def _monitor_thread(username, gmail_address, app_password, stop_event):
                                     scan             = report_entry,
                                     reporter         = username,
                                     gmail_address    = user_doc.get("gmail", ""),
-                                    app_password     = user_doc.get("app_password", ""),
+                                    app_password     = _decrypt(user_doc.get("app_password", "")),
                                     it_email         = IT_EMAIL,
                                     scans_col        = _scans_col,
                                     manual_scans_col = _manual_scans_col,
                                 )
-
                         except Exception as e: _log(f"Error on message: {e}"); continue
                 except imaplib.IMAP4.abort as e: raise ConnectionError(f"IMAP abort: {e}")
                 except Exception as e: _log(f"Inbox check error: {e}")
@@ -849,6 +898,7 @@ import io
 #  Auth routes
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/register", methods=["POST"])
+@limiter.limit("10 per hour")
 def register():
     data     = request.get_json() or {}
     username = (data.get("username") or "").strip().lower()
@@ -857,8 +907,12 @@ def register():
     app_pw   = (data.get("app_password") or "").strip().replace(" ", "")
     if not username or not password or not gmail or not app_pw:
         return jsonify({"error": "All fields are required"}), 400
-    if len(password) < 6:
-        return jsonify({"error": "Password must be at least 6 characters"}), 400
+    if len(username) < 3 or len(username) > 32:
+        return jsonify({"error": "Username must be 3–32 characters"}), 400
+    if not re.match(r'^[a-z0-9_.-]+$', username):
+        return jsonify({"error": "Username may only contain letters, numbers, _ . -"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
     if "@" not in gmail:
         return jsonify({"error": "Invalid Gmail address"}), 400
     if len(app_pw) != 16:
@@ -866,21 +920,35 @@ def register():
     if _user_exists(username):
         return jsonify({"error": "Username already taken"}), 409
     _save_user(username, {
-        "password_hash": _hash_pw(password), "gmail": gmail,
-        "app_password": app_pw, "created_at": datetime.now().isoformat(),
+        "password_hash": _hash_pw(password),
+        "gmail":         gmail,
+        "app_password":  _encrypt(app_pw),   # encrypted at rest
+        "created_at":    datetime.now().isoformat(),
     })
     return jsonify({"message": "Account created successfully"}), 201
 
 @app.route("/login", methods=["POST"])
+@limiter.limit("20 per hour; 5 per minute")
 def login():
     data     = request.get_json() or {}
     username = (data.get("username") or "").strip().lower()
     password = data.get("password", "")
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
     user = _get_user(username)
-    if not user or user["password_hash"] != _hash_pw(password):
+    # Always run bcrypt even for unknown users — prevents timing-based
+    # user enumeration (attacker can't tell "wrong user" from "wrong password")
+    _DUMMY_HASH = "$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    stored_hash = user.get("password_hash", _DUMMY_HASH) if user else _DUMMY_HASH
+    password_ok = _verify_pw(password, stored_hash)
+    if not user or not password_ok:
         return jsonify({"error": "Invalid username or password"}), 401
-    token = secrets.token_hex(32)
-    sessions[token] = username
+    # Migrate legacy SHA-256 hash to bcrypt transparently
+    stored = user.get("password_hash", "")
+    if not stored.startswith("$2b$") and not stored.startswith("$2a$"):
+        _save_user(username, {**user, "password_hash": _hash_pw(password)})
+        print(f"  [Security] Migrated password hash for {username} to bcrypt", flush=True)
+    token = _new_session(username)
     return jsonify({"token": token, "username": username, "message": "Login successful"})
 
 @app.route("/logout", methods=["POST"])
@@ -902,7 +970,7 @@ def monitor_start():
         if state.get("status") == "running":
             return jsonify({"message": "Monitor already running", "status": "running"})
     gmail  = user.get("gmail", "")
-    app_pw = user.get("app_password", "")
+    app_pw = _decrypt(user.get("app_password", ""))
     if not gmail or not app_pw:
         return jsonify({"error": "Gmail credentials not found for this account"}), 400
     stop_event = threading.Event()
@@ -956,6 +1024,7 @@ def dashboard(): return send_from_directory(".", "Dashboard.html")
 
 @app.route("/analyze", methods=["POST"])
 @require_auth
+@limiter.limit("60 per hour; 10 per minute")
 def analyze():
     data = request.get_json()
     if not data:
@@ -1099,7 +1168,7 @@ def analyze_interview():
             scan             = full_scan,
             reporter         = g.username,
             gmail_address    = user_doc.get("gmail", ""),
-            app_password     = user_doc.get("app_password", ""),
+            app_password     = _decrypt(user_doc.get("app_password", "")),
             it_email         = IT_EMAIL,
             scans_col        = _scans_col,
             manual_scans_col = _manual_scans_col,
@@ -1167,16 +1236,19 @@ def it_email_config():
 
 
 @app.route("/health", methods=["GET"])
+@require_auth
 def health():
     return jsonify({
-        "status": "ok", "ml_ready": ML_READY,
-        "mode": "ML + rules" if ML_READY else "rules only",
+        "status":     "ok",
+        "ml_ready":   ML_READY,
+        "mode":       "ML + rules" if ML_READY else "rules only",
         "mongo_ready": MONGO_READY,
-        "mongo_uri": MONGO_URI if MONGO_READY else None,
+        # mongo_uri intentionally omitted — never expose connection strings
     })
 
 
 @app.route("/health/db", methods=["GET"])
+@require_auth
 def health_db():
     if not MONGO_READY:
         return jsonify({"mongo_ready": False, "error": "MongoDB not connected"}), 503
@@ -1195,11 +1267,30 @@ def health_db():
         return jsonify({"mongo_ready": True, "write_test": "FAILED", "error": str(e)}), 500
 
 
+@app.after_request
+def set_security_headers(response):
+    """Add security headers to every response."""
+    response.headers["X-Content-Type-Options"]  = "nosniff"
+    response.headers["X-Frame-Options"]          = "DENY"
+    response.headers["X-XSS-Protection"]         = "1; mode=block"
+    response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"]   = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "   # inline JS used in HTML files
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "connect-src 'self';"
+    )
+    return response
+
+
 if __name__ == "__main__":
+    debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     print("\n  PhishGuard v5  running:")
     print("  Login     -> http://localhost:5000")
     print("  App       -> http://localhost:5000/app")
     print("  Dashboard -> http://localhost:5000/dashboard")
     print(f"  ML mode   -> {'enabled' if ML_READY else 'disabled'}")
-    print(f"  MongoDB   -> {'connected' if MONGO_READY else 'fallback (in-memory)'}\n")
-    app.run(debug=True, port=5000)
+    print(f"  MongoDB   -> {'connected' if MONGO_READY else 'fallback (in-memory)'}")
+    print(f"  Debug     -> {'ON (dev only)' if debug_mode else 'OFF (safe)'}\n")
+    app.run(debug=debug_mode, port=5000)
