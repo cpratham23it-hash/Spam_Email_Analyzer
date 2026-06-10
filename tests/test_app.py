@@ -77,19 +77,21 @@ class TestPasswordHashing:
 class TestEncryption:
 
     def test_encrypt_decrypt_roundtrip(self):
+        if not App.ENCRYPT_READY:
+            pytest.skip("FIELD_ENCRYPT_KEY not set — skipping encryption tests")
         original = "mysecretapppassword"
         encrypted = App._encrypt(original)
         assert encrypted != original
         assert App._decrypt(encrypted) == original
 
     def test_encrypt_produces_different_ciphertext(self):
-        # Fernet uses random IV — same plaintext → different ciphertext
+        if not App.ENCRYPT_READY:
+            pytest.skip("FIELD_ENCRYPT_KEY not set — skipping encryption tests")
         e1 = App._encrypt("samevalue")
         e2 = App._encrypt("samevalue")
         assert e1 != e2
 
     def test_decrypt_plaintext_fallback(self):
-        # Legacy plaintext passwords should pass through _decrypt unchanged
         assert App._decrypt("plaintextvalue") == "plaintextvalue"
 
 
