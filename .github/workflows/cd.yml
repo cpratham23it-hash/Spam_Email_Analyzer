@@ -1,0 +1,65 @@
+name: PhishGuard CD - Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Option A: Deploy to a Linux VPS via SSH
+      # Uncomment and add SSH_HOST, SSH_USER, SSH_KEY to GitHub secrets
+      #
+      # - name: Deploy via SSH
+      #   uses: appleboy/ssh-action@v1
+      #   with:
+      #     host:     ${{ secrets.SSH_HOST }}
+      #     username: ${{ secrets.SSH_USER }}
+      #     key:      ${{ secrets.SSH_KEY }}
+      #     script: |
+      #       cd /opt/phishguard
+      #       git pull origin main
+      #       pip install -r requirements.txt
+      #       sudo systemctl restart phishguard
+
+      # Option B: Deploy to Railway or Render
+      # Uncomment and add RENDER_DEPLOY_HOOK_URL to GitHub secrets
+      #
+      # - name: Trigger Render deploy
+      #   run: |
+      #     curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
+      # Option C: Smoke test after deploy
+      # Uncomment after setting up your domain
+      #
+      # - name: Smoke test production
+      #   run: |
+      #     sleep 15
+      #     curl -f https://your-app-domain.com/login || exit 1
+      #     echo "PASS: Production smoke test passed"
+
+      - name: Deployment summary
+        run: |
+          echo "--------------------------------"
+          echo "PhishGuard Deploy Pipeline"
+          echo "Branch : main"
+          echo "Commit : ${{ github.sha }}"
+          echo "Actor  : ${{ github.actor }}"
+          echo "Time   : $(date -u)"
+          echo "--------------------------------"
+          echo "Uncomment a deploy step above once"
+          echo "you have configured your server secrets."
