@@ -190,6 +190,9 @@ jobs:
         run: |
           timeout 10 python App.py &
           sleep 4
-          curl -f http://localhost:5000/login || \
+          curl -f -X POST http://localhost:5000/login \
+            -H "Content-Type: application/json" \
+            -d '{"username":"test","password":"test"}' \
+            -o /dev/null -w "%{http_code}" | grep -q "401" && \
+            echo "PASS: App started successfully" || \
             (echo "FAIL: App failed to start" && exit 1)
-          echo "PASS: App started successfully"
