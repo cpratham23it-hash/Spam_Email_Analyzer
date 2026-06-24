@@ -1253,34 +1253,6 @@ def health():
     })
 
 
-@app.route("/debug/ssl-check", methods=["GET"])
-def debug_ssl_check():
-    """TEMPORARY — remove after debugging Render+Atlas TLS issue."""
-    import ssl, sys, pymongo, socket
-    raw = os.environ.get("MONGO_URI", "NOT SET")
-
-    # Raw TLS socket test — bypasses pymongo entirely
-    raw_tls_result = "not tested"
-    try:
-        ctx = ssl.create_default_context()
-        with socket.create_connection(("ac-ieqqhcz-shard-00-00.zgbvrtz.mongodb.net", 27017), timeout=8) as sock:
-            with ctx.wrap_socket(sock, server_hostname="ac-ieqqhcz-shard-00-00.zgbvrtz.mongodb.net") as ssock:
-                raw_tls_result = f"SUCCESS - TLS version: {ssock.version()}, cipher: {ssock.cipher()}"
-    except Exception as e:
-        raw_tls_result = f"FAILED - {type(e).__name__}: {e}"
-
-    return jsonify({
-        "mongo_ready_flag": MONGO_READY,
-        "openssl_version": ssl.OPENSSL_VERSION,
-        "openssl_version_info": list(ssl.OPENSSL_VERSION_INFO),
-        "python_version": sys.version,
-        "pymongo_version": pymongo.version,
-        "mongo_uri_set": "MONGO_URI" in os.environ,
-        "mongo_uri_length": len(raw),
-        "raw_tls_socket_test": raw_tls_result,
-    })
-
-
 @app.route("/health/db", methods=["GET"])
 @require_auth
 def health_db():
