@@ -1019,7 +1019,7 @@ def monitor_status():
 #  Core routes
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/")
-def index(): return send_from_directory(".", "login.html")
+def index(): return send_from_directory(".", "Login.html")
 
 @app.route("/app")
 def main_app(): return send_from_directory(".", "index.html")
