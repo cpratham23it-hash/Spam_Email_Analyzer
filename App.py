@@ -1253,6 +1253,22 @@ def health():
     })
 
 
+@app.route("/debug/ssl-check", methods=["GET"])
+def debug_ssl_check():
+    """TEMPORARY — remove after debugging Render+Atlas TLS issue."""
+    import ssl, sys, pymongo
+    raw = os.environ.get("MONGO_URI", "NOT SET")
+    return jsonify({
+        "mongo_ready_flag": MONGO_READY,
+        "openssl_version": ssl.OPENSSL_VERSION,
+        "openssl_version_info": list(ssl.OPENSSL_VERSION_INFO),
+        "python_version": sys.version,
+        "pymongo_version": pymongo.version,
+        "mongo_uri_set": "MONGO_URI" in os.environ,
+        "mongo_uri_length": len(raw),
+    })
+
+
 @app.route("/health/db", methods=["GET"])
 @require_auth
 def health_db():
