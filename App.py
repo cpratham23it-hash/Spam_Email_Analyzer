@@ -1247,6 +1247,19 @@ def health():
     })
 
 
+@app.route("/debug/env-check", methods=["GET"])
+def debug_env_check():
+    """TEMPORARY — remove after debugging Render env var issue."""
+    raw = os.environ.get("MONGO_URI", "NOT SET")
+    masked = raw[:20] + "..." + raw[-15:] if len(raw) > 40 else raw
+    return jsonify({
+        "mongo_uri_is_set": "MONGO_URI" in os.environ,
+        "mongo_uri_masked": masked,
+        "mongo_uri_length": len(raw),
+        "mongo_ready_flag": MONGO_READY,
+    })
+
+
 @app.route("/health/db", methods=["GET"])
 @require_auth
 def health_db():
