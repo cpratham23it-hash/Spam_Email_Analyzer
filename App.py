@@ -24,8 +24,14 @@ try:
     from bson import ObjectId
     from bson.errors import InvalidId
 
+    import certifi
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
-    _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    _mongo_client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        tlsCAFile=certifi.where(),
+    )
     _mongo_client.admin.command("ping")
     _db        = _mongo_client["phishguard"]
     _users_col        = _db["users"]
@@ -1244,19 +1250,6 @@ def health():
         "mode":       "ML + rules" if ML_READY else "rules only",
         "mongo_ready": MONGO_READY,
         # mongo_uri intentionally omitted — never expose connection strings
-    })
-
-
-@app.route("/debug/env-check", methods=["GET"])
-def debug_env_check():
-    """TEMPORARY — remove after debugging Render env var issue."""
-    raw = os.environ.get("MONGO_URI", "NOT SET")
-    masked = raw[:20] + "..." + raw[-15:] if len(raw) > 40 else raw
-    return jsonify({
-        "mongo_uri_is_set": "MONGO_URI" in os.environ,
-        "mongo_uri_masked": masked,
-        "mongo_uri_length": len(raw),
-        "mongo_ready_flag": MONGO_READY,
     })
 
 
