@@ -6,3 +6,4 @@ plyer
 pymongo
 bcrypt
 cryptography
+gunicorn
