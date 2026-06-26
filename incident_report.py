@@ -1,18 +1,25 @@
 """
 PhishGuard – Incident Report Module
-Generates HTML reports and emails them to the IT team.
+Generates HTML reports and emails them via Resend's HTTPS API.
+
+Why Resend instead of SMTP:
+Render's free tier blocks outbound SMTP ports (25/465/587) to prevent abuse.
+Resend sends over HTTPS (port 443), which is never blocked, and has a
+free tier (3,000 emails/month) that's more than enough for incident alerts.
 """
-import smtplib
+import os
 import threading
-from email.mime.multipart import MIMEMultipart
-from email.mime.text      import MIMEText
-from datetime             import datetime
+import requests
+from datetime import datetime
 
 try:
     from pymongo import MongoClient
     from bson    import ObjectId
 except ImportError:
     ObjectId = str
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM    = os.environ.get("RESEND_FROM", "PhishGuard <onboarding@resend.dev>")
 
 
 def build_report_html(scan: dict, reporter: str) -> str:
@@ -196,29 +203,43 @@ def send_incident_report(scan: dict, reporter: str, gmail_address: str,
                           app_password: str, it_email: str,
                           scans_col=None, manual_scans_col=None):
     """
-    Send HTML incident report to IT email in a background thread.
+    Send HTML incident report to IT email in a background thread, via
+    Resend's HTTPS API (works on Render free tier; SMTP ports are blocked).
+
+    gmail_address / app_password are kept as parameters for backward
+    compatibility with existing call sites in App.py, but are no longer
+    used to authenticate — Resend's API key (RESEND_API_KEY env var)
+    handles sending instead.
     """
-    if not it_email or not gmail_address or not app_password:
-        print("  [Report] Skipping — IT_EMAIL or Gmail credentials not configured", flush=True)
+    if not it_email:
+        print("  [Report] Skipping — IT_EMAIL not configured", flush=True)
+        return
+    if not RESEND_API_KEY:
+        print("  [Report] Skipping — RESEND_API_KEY not configured", flush=True)
         return
 
     def _send():
         try:
             risk    = scan.get("risk", "unknown").upper()
             subject = scan.get("subject", "(no subject)")
-
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = "[PhishGuard] {r} RISK Incident — {s}".format(
-                r=risk, s=subject[:60])
-            msg["From"] = "PhishGuard <{g}>".format(g=gmail_address)
-            msg["To"]   = it_email
-
             html_body = build_report_html(scan, reporter)
-            msg.attach(MIMEText(html_body, "html"))
 
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-                server.login(gmail_address, app_password)
-                server.sendmail(gmail_address, it_email, msg.as_string())
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from":    RESEND_FROM,
+                    "to":      [it_email],
+                    "subject": "[PhishGuard] {r} RISK Incident — {s}".format(
+                        r=risk, s=subject[:60]),
+                    "html":    html_body,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
 
             # Update scan doc with report status
             report_meta = {
@@ -237,8 +258,8 @@ def send_incident_report(scan: dict, reporter: str, gmail_address: str,
                 except Exception:
                     pass
 
-            print("  [Report] Sent to {e}  risk={r}".format(
-                e=it_email, r=risk), flush=True)
+            print("  [Report] Sent to {e}  risk={r}  (via Resend, id={i})".format(
+                e=it_email, r=risk, i=resp.json().get("id", "?")), flush=True)
 
         except Exception as e:
             print("  [Report] FAILED: {e}".format(e=e), flush=True)
