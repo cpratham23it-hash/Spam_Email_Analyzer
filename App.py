@@ -24,19 +24,14 @@ try:
     from bson import ObjectId
     from bson.errors import InvalidId
 
-    import certifi
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
-    _mongo_client = MongoClient(
-        MONGO_URI,
-        serverSelectionTimeoutMS=10000,
-        connectTimeoutMS=10000,
-        tlsCAFile=certifi.where(),
-    )
+    _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     _mongo_client.admin.command("ping")
     _db        = _mongo_client["phishguard"]
     _users_col        = _db["users"]
     _scans_col        = _db["scans"]
     _manual_scans_col = _db["manual_scans"]
+    _sessions_col     = _db["sessions"]
 
     _users_col.create_index("username", unique=True)
     _scans_col.create_index([("created_at", DESCENDING)])
@@ -46,13 +41,15 @@ try:
     _manual_scans_col.create_index([("created_at", DESCENDING)])
     _manual_scans_col.create_index("user")
     _manual_scans_col.create_index("risk")
+    _sessions_col.create_index("token", unique=True)
+    _sessions_col.create_index("expires_at", expireAfterSeconds=0)  # auto-cleanup expired sessions
 
     MONGO_READY = True
     print("  [MongoDB] Connected → phishguard database")
 
 except Exception as _me:
     MONGO_READY = False
-    _db = _users_col = _scans_col = _manual_scans_col = None
+    _db = _users_col = _scans_col = _manual_scans_col = _sessions_col = None
     print(f"  [MongoDB] Unavailable ({_me}) – falling back to in-memory")
 
 from incident_report import send_incident_report, build_report_html
@@ -380,19 +377,65 @@ def _increment_fallback_stats(risk):
     _fallback_stats[risk]    += 1
 
 # ── Sessions  {token: {username, expires_at}} ────────────────────────────
-sessions: dict = {}
+# Stored in MongoDB so they survive Render free-tier spin-downs/restarts.
+# Falls back to in-memory dict if Mongo is unavailable.
+sessions: dict = {}   # in-memory fallback only
 SESSION_TTL = timedelta(hours=8)   # tokens expire after 8 hours
 
 def _new_session(username: str) -> str:
     token = secrets.token_hex(32)
-    sessions[token] = {
-        "username":   username,
-        "expires_at": datetime.utcnow() + SESSION_TTL,
-    }
+    expires_at = datetime.utcnow() + SESSION_TTL
+    if MONGO_READY:
+        try:
+            _sessions_col.insert_one({
+                "token": token,
+                "username": username,
+                "expires_at": expires_at,
+            })
+            return token
+        except Exception as e:
+            print(f"  [MongoDB] _new_session error: {e}", flush=True)
+    sessions[token] = {"username": username, "expires_at": expires_at}
     return token
 
+def _get_session(token: str):
+    """Return {'username':..., 'expires_at':...} or None."""
+    if not token:
+        return None
+    if MONGO_READY:
+        try:
+            doc = _sessions_col.find_one({"token": token})
+            if doc:
+                return {"username": doc["username"], "expires_at": doc["expires_at"]}
+            return None
+        except Exception as e:
+            print(f"  [MongoDB] _get_session error: {e}", flush=True)
+    return sessions.get(token)
+
+def _refresh_session(token: str):
+    """Slide the expiry window forward on activity."""
+    new_expiry = datetime.utcnow() + SESSION_TTL
+    if MONGO_READY:
+        try:
+            _sessions_col.update_one({"token": token}, {"$set": {"expires_at": new_expiry}})
+            return
+        except Exception as e:
+            print(f"  [MongoDB] _refresh_session error: {e}", flush=True)
+    if token in sessions:
+        sessions[token]["expires_at"] = new_expiry
+
+def _delete_session(token: str):
+    if MONGO_READY:
+        try:
+            _sessions_col.delete_one({"token": token})
+            return
+        except Exception as e:
+            print(f"  [MongoDB] _delete_session error: {e}", flush=True)
+    sessions.pop(token, None)
+
 def _purge_expired():
-    """Remove expired tokens (called on each auth check)."""
+    """Remove expired tokens. MongoDB TTL index handles this automatically,
+    but we also purge the in-memory fallback dict manually."""
     now = datetime.utcnow()
     expired = [t for t, d in sessions.items() if d["expires_at"] < now]
     for t in expired:
@@ -403,14 +446,14 @@ def require_auth(f):
     def decorated(*args, **kwargs):
         token = request.headers.get("X-Auth-Token") or request.args.get("token")
         _purge_expired()
-        session = sessions.get(token) if token else None
+        session = _get_session(token) if token else None
         if not session:
             return jsonify({"error": "Unauthorized"}), 401
         if session["expires_at"] < datetime.utcnow():
-            sessions.pop(token, None)
+            _delete_session(token)
             return jsonify({"error": "Session expired, please log in again"}), 401
         # Slide the expiry window on activity
-        session["expires_at"] = datetime.utcnow() + SESSION_TTL
+        _refresh_session(token)
         g.username = session["username"]
         g.token    = token
         return f(*args, **kwargs)
@@ -960,7 +1003,7 @@ def login():
 @app.route("/logout", methods=["POST"])
 @require_auth
 def logout():
-    sessions.pop(g.token, None)
+    _delete_session(g.token)
     return jsonify({"message": "Logged out"})
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1019,7 +1062,7 @@ def monitor_status():
 #  Core routes
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/")
-def index(): return send_from_directory(".", "Login.html")
+def index(): return send_from_directory(".", "login.html")
 
 @app.route("/app")
 def main_app(): return send_from_directory(".", "index.html")
