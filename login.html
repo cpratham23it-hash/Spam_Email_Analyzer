@@ -179,6 +179,10 @@
   }
   .section-label::before, .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
+  /* Google button container */
+  .google-btn-wrap { width: 100%; }
+  .google-btn-wrap > div { width: 100% !important; }
+
   /* Hidden Google GSI button (we render our own) */
   #g_id_onload { display: none; }
 </style>
@@ -215,15 +219,7 @@
       <div class="alert" id="login-alert"></div>
 
       <!-- Google Sign In -->
-      <button class="btn-google" onclick="triggerGoogleLogin()">
-        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-        </svg>
-        Continue with Google
-      </button>
+      <div class="google-btn-wrap" id="google-btn-login"></div>
 
       <div class="or-divider">or</div>
 
@@ -247,15 +243,7 @@
       <div class="alert" id="reg-alert"></div>
 
       <!-- Google Sign Up -->
-      <button class="btn-google" onclick="triggerGoogleLogin()">
-        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-        </svg>
-        Sign up with Google
-      </button>
+      <div class="google-btn-wrap" id="google-btn-register"></div>
 
       <div class="or-divider">or fill in manually</div>
 
@@ -294,7 +282,7 @@
 
 <!-- Hidden Google Identity div -->
 <div id="g_id_onload"
-     data-client_id="117308151306-hdti511fju8i6h5og5asqmn11pqahplp.apps.googleusercontent.com"
+     data-client_id="GOOGLE_CLIENT_ID_PLACEHOLDER"
      data-callback="handleGoogleCredential"
      data-auto_prompt="false">
 </div>
@@ -338,13 +326,29 @@ function setLoading(btnId, spinId, on) {
 }
 
 // ── Google Auth ────────────────────────────────────────────────────────
-function triggerGoogleLogin() {
-  // Use Google Identity Services prompt
-  if (window.google && google.accounts) {
-    google.accounts.id.prompt();
-  } else {
-    showAlert('login-alert', 'error', 'Google sign-in is not configured yet. Use username/password for now.');
+const GOOGLE_CLIENT_ID = document.getElementById('g_id_onload')
+  .getAttribute('data-client_id');
+
+function initGoogleButtons() {
+  if (!window.google || !google.accounts) {
+    // GSI script not loaded yet — retry after 500ms
+    setTimeout(initGoogleButtons, 500);
+    return;
   }
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: handleGoogleCredential,
+  });
+  // Render button in login form
+  google.accounts.id.renderButton(
+    document.getElementById('google-btn-login'),
+    { theme: 'outline', size: 'large', width: 380, text: 'continue_with' }
+  );
+  // Render button in register form
+  google.accounts.id.renderButton(
+    document.getElementById('google-btn-register'),
+    { theme: 'outline', size: 'large', width: 380, text: 'signup_with' }
+  );
 }
 
 async function handleGoogleCredential(response) {
@@ -435,6 +439,9 @@ async function doRegister() {
     document.getElementById('btn-reg-text').textContent = 'Create account';
   }
 }
+
+// Initialize Google buttons once GSI script loads
+window.addEventListener('load', initGoogleButtons);
 
 // ── Auto-redirect if already logged in ────────────────────────────────
 const existingToken = localStorage.getItem('pg_token');
