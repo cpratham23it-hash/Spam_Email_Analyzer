@@ -1006,6 +1006,68 @@ def logout():
     _delete_session(g.token)
     return jsonify({"message": "Logged out"})
 
+
+@app.route("/auth/google", methods=["POST"])
+@limiter.limit("20 per hour")
+def google_auth():
+    """
+    Verify Google ID token, then create or log in the user automatically.
+    The user still needs a Gmail app password for live monitoring — if they
+    don't have one set, they can add it later from settings.
+    """
+    data       = request.get_json() or {}
+    id_token   = data.get("credential", "")
+    if not id_token:
+        return jsonify({"error": "No Google credential provided"}), 400
+
+    # Verify the token with Google
+    try:
+        resp = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": id_token},
+            timeout=8,
+        )
+        if not resp.ok:
+            return jsonify({"error": "Invalid Google token"}), 401
+        info = resp.json()
+    except Exception as e:
+        return jsonify({"error": f"Google verification failed: {e}"}), 500
+
+    email  = info.get("email", "").lower().strip()
+    name   = info.get("name", email.split("@")[0])
+    sub    = info.get("sub", "")   # Google's unique user ID
+
+    if not email or not sub:
+        return jsonify({"error": "Could not extract email from Google token"}), 400
+
+    # Use email prefix as username (slugified)
+    username = re.sub(r'[^a-z0-9_.-]', '_', email.split("@")[0].lower())[:32]
+
+    # Create user if they don't exist yet
+    if not _user_exists(username):
+        _save_user(username, {
+            "password_hash": _hash_pw(secrets.token_hex(16)),  # random unguessable password
+            "gmail":         email,
+            "app_password":  "",    # empty — user can add later for monitoring
+            "google_sub":    sub,
+            "google_email":  email,
+            "google_name":   name,
+            "created_at":    datetime.now().isoformat(),
+            "auth_method":   "google",
+        })
+        print(f"  [GoogleAuth] New user created: {username} ({email})", flush=True)
+    else:
+        print(f"  [GoogleAuth] Existing user login: {username} ({email})", flush=True)
+
+    token = _new_session(username)
+    return jsonify({
+        "token":    token,
+        "username": username,
+        "email":    email,
+        "name":     name,
+        "message":  "Signed in with Google",
+    })
+
 # ══════════════════════════════════════════════════════════════════════
 #  Monitor routes
 # ══════════════════════════════════════════════════════════════════════
@@ -1062,7 +1124,7 @@ def monitor_status():
 #  Core routes
 # ══════════════════════════════════════════════════════════════════════
 @app.route("/")
-def index(): return send_from_directory(".", "login.html")
+def index(): return send_from_directory(".", "Login.html")
 
 @app.route("/app")
 def main_app(): return send_from_directory(".", "index.html")

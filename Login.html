@@ -1,50 +1,68 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PhishGuard — Sign In</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
+  /* ── Theme tokens ─────────────────────────────────────────────────── */
   :root {
     --bg: #0a0d12; --surface: #111520; --surface2: #161c2a; --surface3: #1d2438;
     --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.14);
     --text: #e8eaf2; --muted: #6b7590;
     --accent: #00d4aa; --accent-dim: rgba(0,212,170,0.12); --accent-glow: rgba(0,212,170,0.3);
     --red: #ff4d6a; --red-dim: rgba(255,77,106,0.12);
-    --amber: #ffb547;
+    --shadow: rgba(0,0,0,0.4);
+    --grid-line: rgba(0,212,170,0.04);
+    --orb1: rgba(0,212,170,0.07); --orb2: rgba(0,150,255,0.06);
     --mono: 'Space Mono', monospace; --sans: 'DM Sans', sans-serif;
   }
+  [data-theme="light"] {
+    --bg: #f0f4f8; --surface: #ffffff; --surface2: #f0f4f8; --surface3: #e2e8f0;
+    --border: rgba(0,0,0,0.08); --border2: rgba(0,0,0,0.14);
+    --text: #0f172a; --muted: #64748b;
+    --accent: #009e80; --accent-dim: rgba(0,158,128,0.10); --accent-glow: rgba(0,158,128,0.25);
+    --red: #e03d55; --red-dim: rgba(224,61,85,0.10);
+    --shadow: rgba(0,0,0,0.10);
+    --grid-line: rgba(0,158,128,0.05);
+    --orb1: rgba(0,212,170,0.06); --orb2: rgba(0,150,255,0.05);
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: var(--sans); background: var(--bg); color: var(--text);
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    overflow: hidden;
+    overflow: hidden; transition: background .3s, color .3s;
   }
-
-  /* animated grid background */
   body::before {
     content: ''; position: fixed; inset: 0; z-index: 0;
     background-image:
-      linear-gradient(rgba(0,212,170,0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,212,170,0.04) 1px, transparent 1px);
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
     background-size: 40px 40px;
     animation: gridDrift 20s linear infinite;
   }
   @keyframes gridDrift { from { background-position: 0 0; } to { background-position: 40px 40px; } }
 
-  /* glow orbs */
   .orb { position: fixed; border-radius: 50%; filter: blur(80px); pointer-events: none; z-index: 0; }
-  .orb1 { width: 400px; height: 400px; background: rgba(0,212,170,0.07); top: -100px; left: -100px; }
-  .orb2 { width: 300px; height: 300px; background: rgba(0,150,255,0.06); bottom: -80px; right: -80px; }
+  .orb1 { width: 400px; height: 400px; background: var(--orb1); top: -100px; left: -100px; }
+  .orb2 { width: 300px; height: 300px; background: var(--orb2); bottom: -80px; right: -80px; }
 
-  .container {
-    position: relative; z-index: 1;
-    width: 100%; max-width: 440px;
-    padding: 1.5rem;
+  /* ── Theme toggle ────────────────────────────────────────────────── */
+  .theme-toggle {
+    position: fixed; top: 18px; right: 18px; z-index: 100;
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border2);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; transition: all .2s; box-shadow: 0 2px 8px var(--shadow);
   }
+  .theme-toggle:hover { transform: scale(1.1); box-shadow: 0 4px 16px var(--accent-glow); }
 
-  /* logo + brand */
+  /* ── Container ───────────────────────────────────────────────────── */
+  .container { position: relative; z-index: 1; width: 100%; max-width: 440px; padding: 1.5rem; }
+
   .brand {
     display: flex; align-items: center; gap: 12px;
     justify-content: center; margin-bottom: 2.5rem;
@@ -60,22 +78,23 @@
   .brand-text h1 { font-family: var(--mono); font-size: 20px; font-weight: 700; }
   .brand-text p  { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-  /* card */
   .card {
     background: var(--surface);
     border: 1px solid var(--border2);
     border-radius: 20px;
     padding: 2rem;
-    box-shadow: 0 24px 60px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,212,170,0.05);
+    box-shadow: 0 24px 60px var(--shadow), 0 0 0 1px rgba(0,212,170,0.05);
     animation: fadeUp 0.5s ease forwards;
+    transition: background .3s, border-color .3s;
   }
   @keyframes fadeDown { from { opacity:0; transform:translateY(-12px); } to { opacity:1; transform:translateY(0); } }
   @keyframes fadeUp   { from { opacity:0; transform:translateY(16px);  } to { opacity:1; transform:translateY(0); } }
 
-  /* tabs */
+  /* ── Tabs ────────────────────────────────────────────────────────── */
   .tabs {
     display: flex; background: var(--surface2); border-radius: 10px;
     padding: 4px; gap: 4px; margin-bottom: 1.75rem;
+    transition: background .3s;
   }
   .tab {
     flex: 1; padding: 8px; border-radius: 7px; border: none;
@@ -84,7 +103,7 @@
   }
   .tab.active { background: var(--surface3); color: var(--text); }
 
-  /* form */
+  /* ── Forms ───────────────────────────────────────────────────────── */
   .form { display: none; flex-direction: column; gap: 14px; }
   .form.active { display: flex; }
 
@@ -95,7 +114,7 @@
   .field input {
     width: 100%; background: var(--surface2); border: 1px solid var(--border2);
     border-radius: 9px; color: var(--text); font-family: var(--mono); font-size: 12px;
-    padding: 11px 14px; outline: none; transition: border-color .2s, box-shadow .2s;
+    padding: 11px 14px; outline: none; transition: border-color .2s, box-shadow .2s, background .3s;
   }
   .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
   .field input::placeholder { color: var(--muted); opacity: 0.45; }
@@ -108,6 +127,7 @@
   .hint a { color: var(--accent); text-decoration: none; }
   .hint a:hover { text-decoration: underline; }
 
+  /* ── Buttons ─────────────────────────────────────────────────────── */
   .btn {
     width: 100%; padding: 13px; background: var(--accent); color: #000;
     border: none; border-radius: 10px; font-family: var(--mono);
@@ -116,9 +136,30 @@
     margin-top: 4px;
   }
   .btn:hover { background: #00f0c0; box-shadow: 0 0 24px var(--accent-glow); transform: translateY(-1px); }
-  .btn:active { transform: translateY(0); }
   .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
 
+  /* ── Divider ─────────────────────────────────────────────────────── */
+  .or-divider {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; font-family: var(--mono); color: var(--muted);
+  }
+  .or-divider::before, .or-divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border2);
+  }
+
+  /* ── Google button ───────────────────────────────────────────────── */
+  .btn-google {
+    width: 100%; padding: 11px 14px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: 10px; font-family: var(--sans); font-size: 13px; font-weight: 500;
+    color: var(--text); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    transition: all .2s;
+  }
+  .btn-google:hover { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+  .btn-google svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+  /* ── Spinner ─────────────────────────────────────────────────────── */
   .spinner {
     width: 14px; height: 14px; border: 2px solid rgba(0,0,0,.3);
     border-top-color: #000; border-radius: 50%;
@@ -126,29 +167,28 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .alert {
-    padding: 11px 14px; border-radius: 9px; font-size: 12px; display: none;
-    line-height: 1.5;
-  }
-  .alert.error   { background: var(--red-dim);  color: var(--red);   border: 1px solid rgba(255,77,106,.25); }
+  /* ── Alert ───────────────────────────────────────────────────────── */
+  .alert { padding: 11px 14px; border-radius: 9px; font-size: 12px; display: none; line-height: 1.5; }
+  .alert.error   { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(255,77,106,.25); }
   .alert.success { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,212,170,.25); }
 
-  .divider { height: 1px; background: var(--border); margin: 4px 0; }
-
-  /* section label in register form */
   .section-label {
     font-size: 10px; font-family: var(--mono); color: var(--muted);
     text-transform: uppercase; letter-spacing: 1px;
     display: flex; align-items: center; gap: 8px;
   }
-  .section-label::before, .section-label::after {
-    content: ''; flex: 1; height: 1px; background: var(--border);
-  }
+  .section-label::before, .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* Hidden Google GSI button (we render our own) */
+  #g_id_onload { display: none; }
 </style>
 </head>
 <body>
 <div class="orb orb1"></div>
 <div class="orb orb2"></div>
+
+<!-- Theme toggle -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" id="theme-btn">🌙</button>
 
 <div class="container">
   <div class="brand">
@@ -173,6 +213,20 @@
     <!-- LOGIN FORM -->
     <div class="form active" id="form-login">
       <div class="alert" id="login-alert"></div>
+
+      <!-- Google Sign In -->
+      <button class="btn-google" onclick="triggerGoogleLogin()">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Continue with Google
+      </button>
+
+      <div class="or-divider">or</div>
+
       <div class="field">
         <label>Username</label>
         <input type="text" id="l-username" placeholder="your_username" autocomplete="username" />
@@ -192,6 +246,19 @@
     <div class="form" id="form-register">
       <div class="alert" id="reg-alert"></div>
 
+      <!-- Google Sign Up -->
+      <button class="btn-google" onclick="triggerGoogleLogin()">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Sign up with Google
+      </button>
+
+      <div class="or-divider">or fill in manually</div>
+
       <div class="section-label">Account</div>
       <div class="field">
         <label>Username</label>
@@ -199,7 +266,7 @@
       </div>
       <div class="field">
         <label>Password</label>
-        <input type="password" id="r-password" placeholder="min. 6 characters" autocomplete="new-password" />
+        <input type="password" id="r-password" placeholder="min. 8 characters" autocomplete="new-password" />
       </div>
 
       <div class="section-label">Gmail (for live monitoring)</div>
@@ -213,11 +280,9 @@
                maxlength="19" autocomplete="off" />
       </div>
       <div class="hint">
-        ⚙ Need an App Password?
-        <a href="https://myaccount.google.com/apppasswords" target="_blank">
-          myaccount.google.com/apppasswords
-        </a>
-        — requires 2FA enabled on your Google account.
+        Need an App Password?
+        <a href="https://myaccount.google.com/apppasswords" target="_blank">myaccount.google.com/apppasswords</a>
+        — requires 2FA enabled.
       </div>
       <button class="btn" id="btn-reg" onclick="doRegister()">
         <span id="btn-reg-text">Create account</span>
@@ -227,9 +292,30 @@
   </div>
 </div>
 
+<!-- Hidden Google Identity div -->
+<div id="g_id_onload"
+     data-client_id="117308151306-hdti511fju8i6h5og5asqmn11pqahplp.apps.googleusercontent.com"
+     data-callback="handleGoogleCredential"
+     data-auto_prompt="false">
+</div>
+
 <script>
 const BASE = window.location.origin;
 
+// ── Theme ──────────────────────────────────────────────────────────────
+const savedTheme = localStorage.getItem('pg_theme') || 'dark';
+document.documentElement.setAttribute('data-theme', savedTheme);
+document.getElementById('theme-btn').textContent = savedTheme === 'dark' ? '🌙' : '☀️';
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('pg_theme', next);
+  document.getElementById('theme-btn').textContent = next === 'dark' ? '🌙' : '☀️';
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────
 function switchTab(tab, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.form').forEach(f => f.classList.remove('active'));
@@ -251,6 +337,38 @@ function setLoading(btnId, spinId, on) {
   document.getElementById(spinId).style.display = on ? 'block' : 'none';
 }
 
+// ── Google Auth ────────────────────────────────────────────────────────
+function triggerGoogleLogin() {
+  // Use Google Identity Services prompt
+  if (window.google && google.accounts) {
+    google.accounts.id.prompt();
+  } else {
+    showAlert('login-alert', 'error', 'Google sign-in is not configured yet. Use username/password for now.');
+  }
+}
+
+async function handleGoogleCredential(response) {
+  try {
+    const r = await fetch(BASE + '/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      showAlert('login-alert', 'error', data.error || 'Google sign-in failed.');
+      return;
+    }
+    localStorage.setItem('pg_token',    data.token);
+    localStorage.setItem('pg_username', data.username);
+    showAlert('login-alert', 'success', 'Welcome, ' + (data.name || data.username) + '! Redirecting…');
+    setTimeout(() => { window.location.href = '/app'; }, 800);
+  } catch (e) {
+    showAlert('login-alert', 'error', 'Google sign-in failed. Try username/password instead.');
+  }
+}
+
+// ── Login ──────────────────────────────────────────────────────────────
 async function doLogin() {
   const username = document.getElementById('l-username').value.trim();
   const password = document.getElementById('l-password').value;
@@ -261,26 +379,24 @@ async function doLogin() {
 
   try {
     const r = await fetch(BASE + '/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
     const data = await r.json();
     if (!r.ok) { showAlert('login-alert', 'error', data.error || 'Login failed.'); return; }
-
     localStorage.setItem('pg_token',    data.token);
     localStorage.setItem('pg_username', data.username);
-
     showAlert('login-alert', 'success', 'Welcome back, ' + data.username + '! Redirecting…');
     setTimeout(() => { window.location.href = '/app'; }, 800);
   } catch (e) {
-    showAlert('login-alert', 'error', 'Cannot reach server. Is Flask running?');
+    showAlert('login-alert', 'error', 'Cannot reach server.');
   } finally {
     setLoading('btn-login', 'spin-login', false);
     document.getElementById('btn-login-text').textContent = 'Sign in';
   }
 }
 
+// ── Register ───────────────────────────────────────────────────────────
 async function doRegister() {
   const username     = document.getElementById('r-username').value.trim();
   const password     = document.getElementById('r-password').value;
@@ -296,19 +412,14 @@ async function doRegister() {
 
   try {
     const r = await fetch(BASE + '/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password, gmail, app_password }),
     });
     const data = await r.json();
     if (!r.ok) { showAlert('reg-alert', 'error', data.error || 'Registration failed.'); return; }
-
     showAlert('reg-alert', 'success', 'Account created! Signing you in…');
-
-    // Auto-login
     const lr = await fetch(BASE + '/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
     const ld = await lr.json();
@@ -318,31 +429,27 @@ async function doRegister() {
       setTimeout(() => { window.location.href = '/app'; }, 900);
     }
   } catch (e) {
-    showAlert('reg-alert', 'error', 'Cannot reach server. Is Flask running?');
+    showAlert('reg-alert', 'error', 'Cannot reach server.');
   } finally {
     setLoading('btn-reg', 'spin-reg', false);
     document.getElementById('btn-reg-text').textContent = 'Create account';
   }
 }
 
-// If already logged in with a VALID token, skip straight to app
+// ── Auto-redirect if already logged in ────────────────────────────────
 const existingToken = localStorage.getItem('pg_token');
 if (existingToken) {
-  fetch(BASE + '/monitor/status', {
-    headers: { 'X-Auth-Token': existingToken }
-  }).then(r => {
-    if (r.ok) {
-      window.location.href = '/app';
-    } else {
-      // Token is stale/invalid — clear it so we don't loop
+  fetch(BASE + '/monitor/status', { headers: { 'X-Auth-Token': existingToken } })
+    .then(r => {
+      if (r.ok) { window.location.href = '/app'; }
+      else {
+        localStorage.removeItem('pg_token');
+        localStorage.removeItem('pg_username');
+      }
+    }).catch(() => {
       localStorage.removeItem('pg_token');
       localStorage.removeItem('pg_username');
-    }
-  }).catch(() => {
-    // Server unreachable — stay on login, clear stale token
-    localStorage.removeItem('pg_token');
-    localStorage.removeItem('pg_username');
-  });
+    });
 }
 </script>
 </body>

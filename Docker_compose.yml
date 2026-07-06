@@ -1,0 +1,79 @@
+# ── PhishGuard Docker Compose ────────────────────────────────────────────
+# Usage:
+#   Dev:  docker-compose up
+#   Prod: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+version: "3.9"
+
+services:
+
+  # ── Flask app ─────────────────────────────────────────────────────────
+  app:
+    build: .
+    container_name: phishguard_app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - FLASK_DEBUG=false
+      - FIELD_ENCRYPT_KEY=${FIELD_ENCRYPT_KEY}
+      - IT_EMAIL=${IT_EMAIL:-it-team@yourcompany.com}
+    env_file:
+      - .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./model:/app/model:ro    # mount trained model (read-only)
+    networks:
+      - phishguard_net
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/login')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── MongoDB ───────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: phishguard_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"           # remove in production
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - phishguard_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Nginx reverse proxy ───────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: phishguard_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro    # SSL certs
+    depends_on:
+      - app
+    networks:
+      - phishguard_net
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  phishguard_net:
+    driver: bridge

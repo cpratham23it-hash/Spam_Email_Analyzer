@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# Datasets (large CSV files — not needed at runtime)
+*.csv
+
+# Secrets
+.env
+_env
+*.key
+
+# Test files
+tests/
+security_test.py
+pytest.ini
+
+# Dev files
+data.py
+phishing-detector.html
+implementation.txt
+remaining.txt
+
+# Docker files
+Dockerfile
+docker-compose*.yml
+nginx/
+
+# Docs
+README.md
