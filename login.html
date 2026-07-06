@@ -34,7 +34,11 @@
   body {
     font-family: var(--sans); background: var(--bg); color: var(--text);
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    overflow: hidden; transition: background .3s, color .3s;
+    overflow-x: hidden; overflow-y: auto; transition: background .3s, color .3s;
+  }
+  /* When register form is tall, ensure it's reachable */
+
+
   }
   body::before {
     content: ''; position: fixed; inset: 0; z-index: 0;
@@ -61,7 +65,7 @@
   .theme-toggle:hover { transform: scale(1.1); box-shadow: 0 4px 16px var(--accent-glow); }
 
   /* ── Container ───────────────────────────────────────────────────── */
-  .container { position: relative; z-index: 1; width: 100%; max-width: 440px; padding: 1.5rem; }
+  .container { position: relative; z-index: 1; width: 100%; max-width: 440px; padding: 1.5rem; margin: auto; }
 
   .brand {
     display: flex; align-items: center; gap: 12px;
@@ -180,8 +184,12 @@
   .section-label::before, .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
   /* Google button container */
-  .google-btn-wrap { width: 100%; }
-  .google-btn-wrap > div { width: 100% !important; }
+  .google-btn-wrap {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    min-height: 44px;
+  }
 
   /* Hidden Google GSI button (we render our own) */
   #g_id_onload { display: none; }
@@ -331,7 +339,6 @@ const GOOGLE_CLIENT_ID = document.getElementById('g_id_onload')
 
 function initGoogleButtons() {
   if (!window.google || !google.accounts) {
-    // GSI script not loaded yet — retry after 500ms
     setTimeout(initGoogleButtons, 500);
     return;
   }
@@ -339,15 +346,19 @@ function initGoogleButtons() {
     client_id: GOOGLE_CLIENT_ID,
     callback: handleGoogleCredential,
   });
-  // Render button in login form
+
+  // Get actual container width (min 200, max 400 per Google's limits)
+  const w = Math.min(400, Math.max(200,
+    document.querySelector('.card').offsetWidth - 64
+  ));
+
   google.accounts.id.renderButton(
     document.getElementById('google-btn-login'),
-    { theme: 'outline', size: 'large', width: 380, text: 'continue_with' }
+    { theme: 'outline', size: 'large', width: w, text: 'continue_with' }
   );
-  // Render button in register form
   google.accounts.id.renderButton(
     document.getElementById('google-btn-register'),
-    { theme: 'outline', size: 'large', width: 380, text: 'signup_with' }
+    { theme: 'outline', size: 'large', width: w, text: 'signup_with' }
   );
 }
 
